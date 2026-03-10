@@ -147,9 +147,8 @@ class MCTSAgent:
             # Winner is opposite of current player (last player to move won)
             value = node.state.result_for(node.state.current_player)
         else:
-            self._expand(node)
-            _, value = self.infer_fn(node.state)
-            # value is from current player's perspective
+            # _expand calls infer_fn internally; reuse its value directly
+            value = self._expand(node)
 
         # Backup
         self._backup(root, path, value)
@@ -167,12 +166,13 @@ class MCTSAgent:
                 best_child = child
         return best_move, best_child
 
-    def _expand(self, node: Node) -> None:
+    def _expand(self, node: Node) -> float:
+        """Expand node, returning the network value for backup."""
         state = node.state
         legal = state.legal_moves()
         if not legal:
             node.is_expanded = True
-            return
+            return 0.0
 
         policy, value = self.infer_fn(state)
         size = state.size
@@ -185,6 +185,7 @@ class MCTSAgent:
             node.children[move] = Node(child_state, prior=prior)
 
         node.is_expanded = True
+        return value
 
     def _backup(self, root: Node, path: list, leaf_value: float) -> None:
         # leaf_value is from the perspective of the player at the leaf node.

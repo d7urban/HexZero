@@ -7,6 +7,7 @@ a time; spawn cfg.num_self_play_workers of them in parallel.
 """
 
 import multiprocessing as mp
+import queue as _queue
 import numpy as np
 import torch
 
@@ -115,11 +116,19 @@ def self_play_worker(
     Entry point for a subprocess worker.
     Plays `games_to_play` games and puts records into `result_queue`.
     """
+    # Each worker runs in its own process; pin to 1 thread so N parallel
+    # workers share cores instead of all competing for the full thread pool.
+    torch.set_num_threads(1)
+
     device = torch.device("cpu")  # workers always on CPU
     net = build_net(cfg, device)
 
-    data = ckpt_io.load(checkpoint_path, device)
-    net.load_state_dict(data["model_state"])
+    try:
+        data = ckpt_io.load(checkpoint_path, device)
+        net.load_state_dict(data["model_state"])
+    except Exception as e:
+        result_queue.put({"error": f"checkpoint load failed: {e}", "worker_id": worker_id})
+        return
 
     for game_idx in range(games_to_play):
         try:
@@ -160,14 +169,22 @@ def run_self_play_parallel(
 
     all_samples = []
     collected = 0
+    # 10-minute per-game timeout prevents an infinite hang if a worker crashes
+    # before putting anything on the queue.
+    timeout_s = 600
     while collected < total_games:
-        item = result_queue.get()
+        try:
+            item = result_queue.get(timeout=timeout_s)
+        except _queue.Empty:
+            break   # worker probably died; return whatever we have
         if isinstance(item, list):
             all_samples.extend(item)
             collected += 1
             if progress_callback is not None:
                 progress_callback(collected, total_games)
-        # errors are silently skipped; game count will be short
+        # error dicts are silently counted so we don't spin forever
+        else:
+            collected += 1
 
     for p in workers:
         p.join(timeout=5)

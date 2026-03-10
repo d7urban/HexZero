@@ -44,6 +44,12 @@ class DemoWorker(QThread):
     def run(self) -> None:
         device = torch.device("cpu")
 
+        try:
+            self._run_loop(device)
+        except Exception as exc:
+            self.signals.status_message.emit(f"Demo worker crashed: {exc}")
+
+    def _run_loop(self, device) -> None:
         while not self._stop:
             # ----------------------------------------------------------
             # Load current best model (or untrained weights if none yet)
