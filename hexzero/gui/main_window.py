@@ -210,7 +210,7 @@ class MainWindow(QMainWindow):
         splitter.setSizes([540, 660])
 
         # ------ stats bar below the splitter ------
-        self._stats = StatsWidget(sizes=self.cfg.board_sizes)
+        self._stats = StatsWidget(sizes=self.cfg.board_sizes, goal_pct=int(self.cfg.curriculum_threshold * 100))
 
         # ------ central widget: splitter + stats ------
         central = QWidget()

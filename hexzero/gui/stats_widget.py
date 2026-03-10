@@ -41,15 +41,25 @@ class CurriculumWidget(QWidget):
     """
     Displays the board-size curriculum as a compact progression ladder:
 
-        ✓ 7×7  →  ● 9×9  →  ○ 11×11
+        ✓ 7×7  →  ● 9×9  48% / 60%  →  ○ 11×11
 
-    ✓ = completed (green), ● = current (white/bold), ○ = locked (grey).
+    ✓ = completed (green), ● = current with live progress, ○ = locked (grey).
+    The current-size label shows "current% / goal%" and shifts colour as the
+    model approaches the advancement threshold:
+        grey  → below 50 % of goal
+        amber → 50–89 % of goal
+        lime  → 90–99 % of goal
+        green → at or above goal (advancement is imminent / just happened)
+    At the last (largest) board size there is no goal, so only the win rate
+    is shown without a target.
     """
 
-    def __init__(self, sizes: list[int], parent=None):
+    def __init__(self, sizes: list[int], goal_pct: int, parent=None):
         super().__init__(parent)
         self._sizes       = sizes
+        self._goal_pct    = goal_pct   # e.g. 60 for 60%
         self._current_idx = 0
+        self._win_pct     = 0          # last known arena win % for current size
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -73,31 +83,60 @@ class CurriculumWidget(QWidget):
     def advance(self, new_size: int) -> None:
         if new_size in self._sizes:
             self._current_idx = self._sizes.index(new_size)
+            self._win_pct = 0   # reset progress for the new size
             self._refresh()
 
+    def update_progress(self, win_rate: float) -> None:
+        """Call after each arena result with the candidate's win rate (0–1)."""
+        self._win_pct = int(round(win_rate * 100))
+        self._refresh()
+
     def _refresh(self) -> None:
+        is_last = (self._current_idx == len(self._sizes) - 1)
+
         for i, lbl in enumerate(self._size_labels):
             size = self._sizes[i]
             if i < self._current_idx:
                 lbl.setStyleSheet(_STYLE_DONE)
                 lbl.setText(f"✓ {size}×{size}")
             elif i == self._current_idx:
-                lbl.setStyleSheet(_STYLE_CURRENT)
-                lbl.setText(f"● {size}×{size}")
+                if is_last:
+                    # No advancement threshold at the final size
+                    suffix = f"  {self._win_pct}%" if self._win_pct > 0 else ""
+                    lbl.setStyleSheet(_STYLE_CURRENT)
+                    lbl.setText(f"● {size}×{size}{suffix}")
+                else:
+                    lbl.setStyleSheet(self._progress_style())
+                    lbl.setText(self._progress_text(size))
             else:
                 lbl.setStyleSheet(_STYLE_LOCKED)
                 lbl.setText(f"○ {size}×{size}")
 
         for i, arrow in enumerate(self._arrow_labels):
-            # Arrow between size i and i+1; colour it green once size i is done
-            if i < self._current_idx:
-                arrow.setStyleSheet(_STYLE_ARROW_DONE)
-            else:
-                arrow.setStyleSheet(_STYLE_ARROW)
+            arrow.setStyleSheet(
+                _STYLE_ARROW_DONE if i < self._current_idx else _STYLE_ARROW
+            )
+
+    def _progress_text(self, size: int) -> str:
+        if self._win_pct > 0:
+            return f"● {size}×{size}  {self._win_pct}% / {self._goal_pct}%"
+        return f"● {size}×{size}  — / {self._goal_pct}%"
+
+    def _progress_style(self) -> str:
+        if self._goal_pct == 0:
+            return _STYLE_CURRENT
+        ratio = self._win_pct / self._goal_pct
+        if ratio >= 1.0:
+            return "color: #6acc6a; font-size: 10px; font-weight: bold;"
+        if ratio >= 0.9:
+            return "color: #aacc44; font-size: 10px; font-weight: bold;"
+        if ratio >= 0.5:
+            return "color: #ccaa44; font-size: 10px; font-weight: bold;"
+        return _STYLE_CURRENT
 
 
 class StatsWidget(QWidget):
-    def __init__(self, sizes: list[int] | None = None, parent=None):
+    def __init__(self, sizes: list[int] | None = None, goal_pct: int = 60, parent=None):
         super().__init__(parent)
         self.setFixedHeight(34)
         self.setStyleSheet("background: #252525;")
@@ -151,7 +190,7 @@ class StatsWidget(QWidget):
 
         # Curriculum ladder (right-aligned)
         layout.addWidget(_sep())
-        self._curriculum = CurriculumWidget(sizes or [7, 9, 11])
+        self._curriculum = CurriculumWidget(sizes or [7, 9, 11], goal_pct)
         layout.addWidget(self._curriculum)
 
     # ------------------------------------------------------------------
@@ -173,11 +212,13 @@ class StatsWidget(QWidget):
 
     @pyqtSlot(int, int, int)
     def on_arena_result(self, cw: int, chw: int, draws: int) -> None:
-        total = cw + chw + draws
-        pct   = int(100 * cw / total) if total > 0 else 0
+        total    = cw + chw + draws
+        win_rate = cw / total if total > 0 else 0.0
+        pct      = int(100 * win_rate)
         self._arena_lbl.setText(f"Arena  {cw}/{total} ({pct}%)")
         colour = "#6acc6a" if pct >= 55 else "#cc6a6a"
         self._arena_lbl.setStyleSheet(f"color: {colour};")
+        self._curriculum.update_progress(win_rate)
         self._set_phase("Idle", 0, 1)
 
     @pyqtSlot(int)
