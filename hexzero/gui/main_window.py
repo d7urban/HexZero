@@ -234,11 +234,15 @@ class MainWindow(QMainWindow):
         toolbar.addWidget(self._size_combo)
 
         toolbar.addSeparator()
-        toolbar.addWidget(QLabel("  MCTS sims: "))
+        toolbar.addWidget(QLabel("  Training sims: "))
         self._sims_spin = QSpinBox()
         self._sims_spin.setRange(10, 2000)
         self._sims_spin.setValue(self.cfg.mcts_simulations)
         self._sims_spin.setSingleStep(50)
+        self._sims_spin.setToolTip(
+            "MCTS simulations per move during self-play and arena.\n"
+            "The live board demo always uses 50 sims for display speed."
+        )
         toolbar.addWidget(self._sims_spin)
 
         # ------ status bar ------
