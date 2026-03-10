@@ -22,7 +22,7 @@ from hexzero.mcts import MCTSAgent
 from hexzero.net import build_net
 import hexzero.checkpoint as ckpt_io
 
-_DISPLAY_SIMS   = 50     # MCTS simulations per displayed move
+_DISPLAY_SIMS   = 10     # MCTS simulations per displayed move
 _MOVE_DELAY_MS  = 650    # pause between moves (ms)
 _GAME_PAUSE_MS  = 1500   # pause after a game ends before starting the next
 

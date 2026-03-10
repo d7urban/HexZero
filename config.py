@@ -1,3 +1,4 @@
+import os
 from dataclasses import dataclass, field
 
 
@@ -27,8 +28,11 @@ class HexZeroConfig:
     temperature_moves: int = 20      # use temp=1 for first N moves, then 0
     temperature: float = 1.0
 
-    # Self-play
-    num_self_play_workers: int = 4
+    # Self-play — default to half the logical CPUs so the demo and training
+    # threads always have cores to run on; minimum 1, maximum 8.
+    num_self_play_workers: int = field(
+        default_factory=lambda: max(1, min(8, (os.cpu_count() or 2) // 2))
+    )
     games_per_iteration: int = 100
 
     # Training
