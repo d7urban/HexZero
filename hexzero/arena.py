@@ -68,7 +68,7 @@ def run_arena(
     Run cfg.arena_games games between candidate and champion.
     Returns (candidate_wins, champion_wins, draws).
     """
-    device = torch.device("cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     candidate = build_net(cfg, device)
     champion  = build_net(cfg, device)

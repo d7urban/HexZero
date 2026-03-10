@@ -57,7 +57,7 @@ def run_headless(cfg: HexZeroConfig, resume_path: str = None) -> None:
             print(f"Iteration {iteration}  |  board {board_size}×{board_size}")
 
             print("  Self-play…", end="", flush=True)
-            samples = run_self_play_parallel(cfg, best_path, board_size, cfg.games_per_iteration)
+            samples = run_self_play_parallel(cfg, best_path, device, board_size, cfg.games_per_iteration)
             for s in samples:
                 trainer.replay_buffer.add(s)
             print(f" {len(samples)} samples ({cfg.games_per_iteration} games × 2 with augmentation)")

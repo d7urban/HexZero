@@ -42,7 +42,7 @@ class DemoWorker(QThread):
         self._stop = True
 
     def run(self) -> None:
-        device = torch.device("cpu")
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         try:
             self._run_loop(device)

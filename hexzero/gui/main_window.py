@@ -92,8 +92,9 @@ class TrainingWorker(QObject):
                 self.signals.self_play_progress.emit(done, total)
                 self.signals.buffer_updated.emit(len(self.trainer.replay_buffer))
 
+            device  = self.trainer.device
             samples = run_self_play_parallel(
-                cfg, best_path, board_size, cfg.games_per_iteration,
+                cfg, best_path, device, board_size, cfg.games_per_iteration,
                 progress_callback=_sp_progress,
             )
             for s in samples:
