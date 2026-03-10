@@ -1,9 +1,9 @@
 """
 StatsWidget: compact horizontal strip showing live training progress.
 
-┌──────────────────────────────────────────────────────────────────┐
-│ Iter 3  │  Self-play ████████░░ 80/100  │  Buffer 8,400  │  Arena 24/40 (60%)  │
-└──────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────┐
+│ Iter 3  │  Self-play ████████░░ 80/100  │  Buffer 8,400  │  Arena 24/40  │  ✓7×7 → ●9×9 → ○11×11  │
+└──────────────────────────────────────────────────────────────────────────┘
 """
 
 from PyQt6.QtWidgets import (
@@ -13,7 +13,6 @@ from PyQt6.QtCore import pyqtSlot
 
 
 def _sep() -> QFrame:
-    """Vertical separator line."""
     f = QFrame()
     f.setFrameShape(QFrame.Shape.VLine)
     f.setStyleSheet("color: #555;")
@@ -23,15 +22,82 @@ def _sep() -> QFrame:
 def _label(text: str, bold: bool = False) -> QLabel:
     lbl = QLabel(text)
     if bold:
-        f = lbl.font()
-        f.setBold(True)
-        lbl.setFont(f)
+        font = lbl.font()
+        font.setBold(True)
+        lbl.setFont(font)
     lbl.setStyleSheet("color: #c0c0c0;")
     return lbl
 
 
+# Styles for each curriculum state
+_STYLE_DONE    = "color: #6acc6a; font-size: 10px; font-weight: bold;"
+_STYLE_CURRENT = "color: #ffffff; font-size: 10px; font-weight: bold;"
+_STYLE_LOCKED  = "color: #505050; font-size: 10px;"
+_STYLE_ARROW   = "color: #505050; font-size: 10px;"
+_STYLE_ARROW_DONE = "color: #6acc6a; font-size: 10px;"
+
+
+class CurriculumWidget(QWidget):
+    """
+    Displays the board-size curriculum as a compact progression ladder:
+
+        ✓ 7×7  →  ● 9×9  →  ○ 11×11
+
+    ✓ = completed (green), ● = current (white/bold), ○ = locked (grey).
+    """
+
+    def __init__(self, sizes: list[int], parent=None):
+        super().__init__(parent)
+        self._sizes       = sizes
+        self._current_idx = 0
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+
+        self._size_labels:  list[QLabel] = []
+        self._arrow_labels: list[QLabel] = []
+
+        for i, _ in enumerate(sizes):
+            if i > 0:
+                arrow = QLabel("→")
+                layout.addWidget(arrow)
+                self._arrow_labels.append(arrow)
+
+            lbl = QLabel()
+            layout.addWidget(lbl)
+            self._size_labels.append(lbl)
+
+        self._refresh()
+
+    def advance(self, new_size: int) -> None:
+        if new_size in self._sizes:
+            self._current_idx = self._sizes.index(new_size)
+            self._refresh()
+
+    def _refresh(self) -> None:
+        for i, lbl in enumerate(self._size_labels):
+            size = self._sizes[i]
+            if i < self._current_idx:
+                lbl.setStyleSheet(_STYLE_DONE)
+                lbl.setText(f"✓ {size}×{size}")
+            elif i == self._current_idx:
+                lbl.setStyleSheet(_STYLE_CURRENT)
+                lbl.setText(f"● {size}×{size}")
+            else:
+                lbl.setStyleSheet(_STYLE_LOCKED)
+                lbl.setText(f"○ {size}×{size}")
+
+        for i, arrow in enumerate(self._arrow_labels):
+            # Arrow between size i and i+1; colour it green once size i is done
+            if i < self._current_idx:
+                arrow.setStyleSheet(_STYLE_ARROW_DONE)
+            else:
+                arrow.setStyleSheet(_STYLE_ARROW)
+
+
 class StatsWidget(QWidget):
-    def __init__(self, parent=None):
+    def __init__(self, sizes: list[int] | None = None, parent=None):
         super().__init__(parent)
         self.setFixedHeight(34)
         self.setStyleSheet("background: #252525;")
@@ -40,7 +106,7 @@ class StatsWidget(QWidget):
         layout.setContentsMargins(12, 0, 12, 0)
         layout.setSpacing(10)
 
-        # Iteration
+        # Iteration counter
         self._iter_lbl = _label("Iter —", bold=True)
         layout.addWidget(self._iter_lbl)
         layout.addWidget(_sep())
@@ -83,9 +149,10 @@ class StatsWidget(QWidget):
 
         layout.addStretch()
 
-        # Board size indicator (right-aligned)
-        self._size_lbl = _label("7 × 7")
-        layout.addWidget(self._size_lbl)
+        # Curriculum ladder (right-aligned)
+        layout.addWidget(_sep())
+        self._curriculum = CurriculumWidget(sizes or [7, 9, 11])
+        layout.addWidget(self._curriculum)
 
     # ------------------------------------------------------------------
     # Slots
@@ -100,16 +167,9 @@ class StatsWidget(QWidget):
     def on_self_play_progress(self, done: int, total: int) -> None:
         self._set_phase("Self-play", done, total)
 
-    def on_training_started(self, total_steps: int) -> None:
-        self._set_phase("Training", 0, total_steps)
-
     @pyqtSlot(dict)
     def on_metrics(self, _metrics: dict) -> None:
-        # Charts handle loss display; progress bar is driven by self_play_progress.
-        pass
-
-    def on_arena_started(self, total: int) -> None:
-        self._set_phase("Arena", 0, total)
+        self._phase_lbl.setText("Training")
 
     @pyqtSlot(int, int, int)
     def on_arena_result(self, cw: int, chw: int, draws: int) -> None:
@@ -123,12 +183,15 @@ class StatsWidget(QWidget):
     @pyqtSlot(int)
     def on_buffer_updated(self, n: int) -> None:
         if n >= 1_000:
-            self._buffer_lbl.setText(f"Buffer  {n/1000:.1f}k")
+            self._buffer_lbl.setText(f"Buffer  {n / 1000:.1f}k")
         else:
             self._buffer_lbl.setText(f"Buffer  {n}")
 
-    def on_board_size_changed(self, size: int) -> None:
-        self._size_lbl.setText(f"{size} × {size}")
+    @pyqtSlot(int)
+    def on_board_size_advanced(self, size: int) -> None:
+        self._curriculum.advance(size)
+        # Also flip the progress bar to a fresh state for the new size
+        self._set_phase("Self-play", 0, 1)
 
     # ------------------------------------------------------------------
 

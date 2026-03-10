@@ -35,3 +35,6 @@ class TrainingSignals(QObject):
 
     # Buffer fill: total samples currently stored
     buffer_updated = pyqtSignal(int)
+
+    # Curriculum: emitted when training advances to a larger board size
+    board_size_advanced = pyqtSignal(int)

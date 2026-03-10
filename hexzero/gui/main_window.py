@@ -66,6 +66,8 @@ class TrainingWorker(QObject):
 
         cfg        = self.cfg
         board_size = cfg.initial_board_size
+        size_idx   = (cfg.board_sizes.index(board_size)
+                      if board_size in cfg.board_sizes else 0)
 
         # Bootstrap: save initial checkpoint if none exists yet
         best_path = ckpt_io.best_checkpoint_path(cfg.checkpoint_dir)
@@ -126,16 +128,32 @@ class TrainingWorker(QObject):
             cw, chw, draws = run_arena(cand_path, best_path, cfg, board_size)
             self.signals.arena_result.emit(cw, chw, draws)
 
-            total = cw + chw + draws
+            total    = cw + chw + draws
+            win_rate = cw / total if total > 0 else 0.0
+
             if candidate_is_better(cw, chw, total, cfg.arena_win_threshold):
                 best_path = cand_path
                 self.signals.checkpoint_saved.emit(best_path)
-                self.signals.status_message.emit(
-                    f"Iteration {self._iteration} — new champion! ({cw}/{total})"
-                )
+
+                # Curriculum: advance board size if win rate clears the threshold
+                next_idx = size_idx + 1
+                if win_rate >= cfg.curriculum_threshold and next_idx < len(cfg.board_sizes):
+                    size_idx   = next_idx
+                    board_size = cfg.board_sizes[size_idx]
+                    self.signals.board_size_advanced.emit(board_size)
+                    self.signals.status_message.emit(
+                        f"Iteration {self._iteration} — curriculum advanced to "
+                        f"{board_size}×{board_size}! ({cw}/{total}, {win_rate:.0%})"
+                    )
+                else:
+                    self.signals.status_message.emit(
+                        f"Iteration {self._iteration} — new champion! "
+                        f"({cw}/{total}, {win_rate:.0%})"
+                    )
             else:
                 self.signals.status_message.emit(
-                    f"Iteration {self._iteration} — champion retained ({chw}/{total})"
+                    f"Iteration {self._iteration} — champion retained "
+                    f"({chw}/{total}, {win_rate:.0%} for candidate)"
                 )
 
             self.signals.iteration_finished.emit(self._iteration)
@@ -192,7 +210,7 @@ class MainWindow(QMainWindow):
         splitter.setSizes([540, 660])
 
         # ------ stats bar below the splitter ------
-        self._stats = StatsWidget()
+        self._stats = StatsWidget(sizes=self.cfg.board_sizes)
 
         # ------ central widget: splitter + stats ------
         central = QWidget()
@@ -280,6 +298,8 @@ class MainWindow(QMainWindow):
         sig.arena_result.connect(self._stats.on_arena_result)
         sig.buffer_updated.connect(self._stats.on_buffer_updated)
         sig.metrics_updated.connect(self._stats.on_metrics)
+        sig.board_size_advanced.connect(self._on_size_advanced)
+        sig.board_size_advanced.connect(self._stats.on_board_size_advanced)
 
     # ------------------------------------------------------------------
     # Slots
@@ -367,7 +387,19 @@ class MainWindow(QMainWindow):
         size = self._size_combo.itemData(idx)
         self.cfg.initial_board_size = size
         self._board.set_state(HexState(size))
-        self._stats.on_board_size_changed(size)
+        if self._demo:
+            self._demo.set_board_size(size)
+
+    @pyqtSlot(int)
+    def _on_size_advanced(self, size: int) -> None:
+        """Curriculum advanced — sync the combo box and demo worker."""
+        idx = self._size_combo.findData(size)
+        if idx >= 0:
+            # Block the signal so _on_size_changed doesn't also fire
+            self._size_combo.blockSignals(True)
+            self._size_combo.setCurrentIndex(idx)
+            self._size_combo.blockSignals(False)
+        self._board.set_state(HexState(size))
         if self._demo:
             self._demo.set_board_size(size)
 
