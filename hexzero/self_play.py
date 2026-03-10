@@ -14,7 +14,7 @@ import numpy as np
 import torch
 
 from config import HexZeroConfig
-from hexzero.game import HexState
+from hexzero.game import HexState, SWAP_MOVE
 from hexzero.features import extract_features
 from hexzero.net import build_net
 from hexzero.mcts import MCTSAgent
@@ -41,7 +41,7 @@ def _play_one_game(
         temperature_moves=cfg.temperature_moves,
     )
 
-    state   = HexState(board_size)
+    state   = HexState(board_size, pie_rule=cfg.use_pie_rule)
     history = []   # (features, size_norm, pi, player)
 
     while not state.is_terminal():
@@ -49,8 +49,8 @@ def _play_one_game(
         pi, _, _ = agent.search(state, add_noise=True)
         history.append((features, size_norm, pi, state.current_player))
         size = state.size
-        idx  = int(np.random.choice(size * size, p=pi))
-        move = (idx // size, idx % size)
+        idx  = int(np.random.choice(len(pi), p=pi))
+        move = SWAP_MOVE if idx == size * size else (idx // size, idx % size)
         agent.update_root(move)
         state.apply_move(move)
 
@@ -67,7 +67,9 @@ def _play_one_game(
             "size_norm":  size_norm,
         })
         aug_features = np.rot90(features, 2, axes=(1, 2)).copy()
-        aug_pi       = pi[::-1].copy()
+        # Reverse only the board positions; preserve the swap slot at the end
+        n_board  = board_size * board_size
+        aug_pi   = np.concatenate([pi[:n_board][::-1], pi[n_board:]]).copy()
         aug_samples.append({
             "features":   aug_features,
             "policy":     aug_pi,
@@ -96,7 +98,7 @@ def run_self_play_parallel(
     """
     net  = build_net(cfg, device)
     data = ckpt_io.load(checkpoint_path, device)
-    net.load_state_dict(data["model_state"])
+    ckpt_io.load_weights(net, data["model_state"])
 
     server = InferenceServer(net, device)
 

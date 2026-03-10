@@ -9,7 +9,7 @@ import torch
 import numpy as np
 
 from config import HexZeroConfig
-from hexzero.game import HexState, BLACK, WHITE
+from hexzero.game import HexState, BLACK, WHITE, SWAP_MOVE
 from hexzero.features import extract_features
 from hexzero.net import HexNet, build_net
 from hexzero.mcts import MCTSAgent
@@ -48,7 +48,7 @@ def _play_game(
         size    = state.size
         pi, _, _ = agent.search(state, add_noise=False)
         idx     = int(np.argmax(pi))  # greedy in arena
-        move    = (idx // size, idx % size)
+        move    = SWAP_MOVE if idx == size * size else (idx // size, idx % size)
         agent.update_root(move)
         # Update the other agent's tree too
         other = agents[-player]
@@ -79,8 +79,8 @@ def run_arena(
 
     cand_data = ckpt_io.load(candidate_path, device)
     champ_data = ckpt_io.load(champion_path, device)
-    candidate.load_state_dict(cand_data["model_state"])
-    champion.load_state_dict(champ_data["model_state"])
+    ckpt_io.load_weights(candidate, cand_data["model_state"])
+    ckpt_io.load_weights(champion,  champ_data["model_state"])
 
     cand_infer  = _make_infer_fn(candidate, device)
     champ_infer = _make_infer_fn(champion,  device)
@@ -105,7 +105,7 @@ def run_arena(
         white_agent = MCTSAgent(infer_fn=white_infer, simulations=cfg.mcts_simulations,
                                 cpuct=cfg.cpuct, dirichlet_epsilon=0.0)
 
-        state  = HexState(board_size)
+        state  = HexState(board_size, pie_rule=cfg.use_pie_rule)
         winner = _play_game(state, black_agent, white_agent)
 
         if winner == cand_color:

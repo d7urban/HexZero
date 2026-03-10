@@ -17,12 +17,12 @@ from PyQt6.QtCore import QThread
 
 from config import HexZeroConfig
 from hexzero.features import extract_features
-from hexzero.game import HexState
+from hexzero.game import HexState, SWAP_MOVE
 from hexzero.mcts import MCTSAgent
 from hexzero.net import build_net
 import hexzero.checkpoint as ckpt_io
 
-_DISPLAY_SIMS   = 10     # MCTS simulations per displayed move
+_DISPLAY_SIMS   = 25     # MCTS simulations per displayed move
 _MOVE_DELAY_MS  = 650    # pause between moves (ms)
 _GAME_PAUSE_MS  = 1500   # pause after a game ends before starting the next
 
@@ -59,7 +59,7 @@ class DemoWorker(QThread):
             if best_path:
                 try:
                     data = ckpt_io.load(best_path, device)
-                    net.load_state_dict(data["model_state"])
+                    ckpt_io.load_weights(net, data["model_state"])
                 except Exception:
                     pass  # checkpoint unreadable mid-write; use current weights
             net.eval()
@@ -79,7 +79,7 @@ class DemoWorker(QThread):
                 temperature=1.0,
                 temperature_moves=self.cfg.temperature_moves,
             )
-            state = HexState(self._size)
+            state = HexState(self._size, pie_rule=self.cfg.use_pie_rule)
 
             # ----------------------------------------------------------
             # Play one full game, emitting a signal after each move
@@ -90,7 +90,8 @@ class DemoWorker(QThread):
                 self.signals.game_step.emit(state.board.copy(), pi.copy(), info)
 
                 idx  = int(np.argmax(pi))
-                move = (idx // state.size, idx % state.size)
+                size = state.size
+                move = SWAP_MOVE if idx == size * size else (idx // size, idx % size)
                 agent.update_root(move)
                 state.apply_move(move)
                 self.msleep(_MOVE_DELAY_MS)

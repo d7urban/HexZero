@@ -244,6 +244,12 @@ class StatsWidget(QWidget):
 
     # ------------------------------------------------------------------
 
+    def restore_state(self, board_size: int, win_rate: float) -> None:
+        """Restore curriculum position and last known win rate (called on startup)."""
+        self._curriculum.advance(board_size)
+        if win_rate > 0:
+            self._curriculum.update_progress(win_rate)
+
     def _set_phase(self, phase: str, done: int, total: int) -> None:
         self._phase_lbl.setText(phase)
         self._progress.setRange(0, max(1, total))

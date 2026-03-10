@@ -33,6 +33,7 @@ _COL_WHITE_EDGE = QColor(155, 20,  20)    # left/right border (red)
 _COL_LAST_MOVE  = QColor(80,  200, 80,  200)
 _COL_POLICY_HOT = QColor(255, 80,  0,   160)
 _COL_POLICY_COLD= QColor(0,   80,  255, 40)
+_COL_WIN_DOT    = QColor(60,  220, 80)    # green dot on winning-path stones
 
 
 def _hex_corners(cx: float, cy: float, r: float) -> list:
@@ -58,6 +59,7 @@ class BoardWidget(QWidget):
         self._state: HexState | None = None
         self._policy: np.ndarray | None = None   # (H*W,) float32
         self._hover: tuple[int, int] | None = None
+        self._win_path: set[tuple[int, int]] = set()
         self.setMouseTracking(True)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setMinimumSize(300, 300)
@@ -69,6 +71,7 @@ class BoardWidget(QWidget):
     def set_state(self, state: HexState, policy: np.ndarray | None = None) -> None:
         self._state = state
         self._policy = policy
+        self._win_path = state.winning_path() if state.is_terminal() else set()
         self.update()
 
     def set_policy(self, policy: np.ndarray) -> None:
@@ -280,7 +283,10 @@ class BoardWidget(QWidget):
         # Stone dot for occupied cells
         if cell_val != EMPTY:
             dot_r = radius * 0.30
-            dot_c = QColor(140, 185, 255) if cell_val == BLACK else QColor(255, 140, 140)
+            if (row, col) in self._win_path:
+                dot_c = _COL_WIN_DOT
+            else:
+                dot_c = QColor(140, 185, 255) if cell_val == BLACK else QColor(255, 140, 140)
             painter.setBrush(QBrush(dot_c))
             painter.setPen(Qt.PenStyle.NoPen)
             painter.drawEllipse(center, dot_r, dot_r)

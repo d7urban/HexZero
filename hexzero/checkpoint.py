@@ -5,6 +5,7 @@ Saves/loads model + optimizer state atomically.  Manages a rolling
 window of the last N checkpoints and a `best.pt` symlink.
 """
 
+import json
 import os
 import shutil
 from pathlib import Path
@@ -12,6 +13,16 @@ from pathlib import Path
 import torch
 
 from hexzero.net import HexNet
+
+
+def _raw(net) -> HexNet:
+    """Strip a torch.compile OptimizedModule wrapper, if present."""
+    return getattr(net, "_orig_mod", net)
+
+
+def load_weights(net, state_dict: dict, strict: bool = True) -> None:
+    """Load a state dict into net, unwrapping torch.compile if needed."""
+    _raw(net).load_state_dict(state_dict, strict=strict)
 
 
 def save(
@@ -36,7 +47,7 @@ def save(
 
     payload = {
         "iteration": iteration,
-        "model_state": net.state_dict(),
+        "model_state": _raw(net).state_dict(),
         "optimizer_state": optimizer.state_dict(),
         "metrics": metrics,
     }
@@ -74,3 +85,24 @@ def latest_iteration(checkpoint_dir: str) -> int:
         return 0
     name = checkpoints[-1].stem  # "iter_000042"
     return int(name.split("_")[1])
+
+
+def save_training_state(checkpoint_dir: str, state: dict) -> None:
+    """Atomically persist a small training-state dict as JSON."""
+    ckpt_dir = Path(checkpoint_dir)
+    ckpt_dir.mkdir(parents=True, exist_ok=True)
+    tmp  = ckpt_dir / "training_state.json.tmp"
+    dest = ckpt_dir / "training_state.json"
+    tmp.write_text(json.dumps(state))
+    os.replace(tmp, dest)
+
+
+def load_training_state(checkpoint_dir: str) -> dict:
+    """Return the dict saved by save_training_state, or {} if absent/corrupt."""
+    path = Path(checkpoint_dir) / "training_state.json"
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text())
+    except Exception:
+        return {}

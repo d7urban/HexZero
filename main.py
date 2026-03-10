@@ -39,6 +39,7 @@ def run_headless(cfg: HexZeroConfig, resume_path: str = None) -> None:
     net     = build_net(cfg, device)
     trainer = Trainer(cfg, net, device)
 
+    buf_path  = os.path.join(cfg.checkpoint_dir, "replay_buffer.pt.gz")
     best_path = resume_path or ckpt_io.best_checkpoint_path(cfg.checkpoint_dir)
     board_size = cfg.initial_board_size
     if best_path is None:
@@ -52,6 +53,11 @@ def run_headless(cfg: HexZeroConfig, resume_path: str = None) -> None:
         print(f"Resumed from {best_path}  (board {board_size}×{board_size})")
     iteration  = ckpt_io.latest_iteration(cfg.checkpoint_dir)
 
+    if os.path.exists(buf_path):
+        print(f"Loading replay buffer from {buf_path}…", end="", flush=True)
+        trainer.replay_buffer.load(buf_path)
+        print(f" {len(trainer.replay_buffer)} samples")
+
     try:
         while True:
             iteration += 1
@@ -63,6 +69,7 @@ def run_headless(cfg: HexZeroConfig, resume_path: str = None) -> None:
             for s in samples:
                 trainer.replay_buffer.add(s)
             print(f" {len(samples)} samples ({cfg.games_per_iteration} games × 2 with augmentation)")
+            trainer.replay_buffer.save(buf_path)
 
             print("  Training…", end="", flush=True)
             metrics_list = trainer.train_iteration(iteration, board_size)
@@ -115,7 +122,7 @@ def run_gui(cfg: HexZeroConfig, resume_path: str = None) -> None:
             import torch
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
             data = ckpt_io.load(resume_path, device)
-            window._net.load_state_dict(data["model_state"])
+            ckpt_io.load_weights(window._net, data["model_state"])
         except Exception as e:
             print(f"Warning: could not load checkpoint: {e}")
 

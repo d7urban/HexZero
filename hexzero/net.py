@@ -49,6 +49,8 @@ class HexNet(nn.Module):
 
         # Policy head
         self.policy_conv = nn.Conv2d(F_, 1, 1, bias=True)
+        # Extra scalar logit for the pie-rule swap action (global reasoning)
+        self.swap_logit = nn.Linear(F_, 1)
 
         # Value head
         # After global avg pool: vector of size F_ + 1 (size_scalar appended)
@@ -67,22 +69,32 @@ class HexNet(nn.Module):
         x = self.tower(x)                           # (B, F, H, W)
 
         # Policy head
-        policy_logits = self.policy_conv(x)         # (B, 1, H, W)
+        policy_logits = self.policy_conv(x)              # (B, 1, H, W)
         B, _, H, W = policy_logits.shape
-        policy_logits = policy_logits.view(B, H * W) # (B, H*W)
+        policy_logits = policy_logits.view(B, H * W)     # (B, H*W)
+        pooled = x.mean(dim=[2, 3])                      # (B, F)  global avg pool
+        swap_logit = self.swap_logit(pooled)              # (B, 1)
+        policy_logits = torch.cat([policy_logits, swap_logit], dim=1)  # (B, H*W+1)
         log_policy = F.log_softmax(policy_logits, dim=1)
 
         # Value head
-        pooled = x.mean(dim=[2, 3])                 # (B, F)  global avg pool
         v_input = torch.cat([pooled, size_scalar], dim=1)  # (B, F+1)
         v = F.relu(self.value_fc1(v_input))
         value = torch.tanh(self.value_fc2(v))       # (B, 1)
 
-        return log_policy, value.squeeze(1)         # (B, H*W), (B,)
+        return log_policy, value.squeeze(1)         # (B, H*W+1), (B,)
 
 
 def build_net(cfg: HexZeroConfig, device: torch.device = None) -> HexNet:
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    torch.set_float32_matmul_precision("high")  # enable TF32 tensor cores
     net = HexNet(cfg).to(device)
+    # torch.compile() (PyTorch ≥ 2.0) fuses ops and generates optimised kernels.
+    # Falls back silently on older installs or unsupported platforms.
+    if hasattr(torch, "compile"):
+        try:
+            net = torch.compile(net)
+        except Exception:
+            pass
     return net

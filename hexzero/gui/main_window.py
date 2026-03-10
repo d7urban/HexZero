@@ -77,6 +77,26 @@ class TrainingWorker(QObject):
             best_path = self.trainer.save_checkpoint(0, board_size)
             self.signals.checkpoint_saved.emit(best_path)
 
+        # Resume iteration counter from disk so we never overwrite / prune a
+        # freshly-saved candidate checkpoint on the very first save.
+        self._iteration = ckpt_io.latest_iteration(cfg.checkpoint_dir)
+
+        # Restore replay buffer from disk if available
+        buf_path = os.path.join(cfg.checkpoint_dir, "replay_buffer.pt.gz")
+        if os.path.exists(buf_path):
+            try:
+                self.signals.status_message.emit("Loading replay buffer…")
+                self.trainer.replay_buffer.load(buf_path)
+                self.signals.buffer_updated.emit(len(self.trainer.replay_buffer))
+            except Exception as e:
+                self.signals.status_message.emit(f"Could not load replay buffer: {e}")
+
+        # Restore board size from persisted training state if available
+        ts = ckpt_io.load_training_state(cfg.checkpoint_dir)
+        if ts.get("board_size") and ts["board_size"] in cfg.board_sizes:
+            board_size = ts["board_size"]
+            size_idx   = cfg.board_sizes.index(board_size)
+
         stop = self._stop_event
         while not stop.is_set():
             self._iteration += 1
@@ -103,6 +123,12 @@ class TrainingWorker(QObject):
             for s in samples:
                 self.trainer.replay_buffer.add(s)
             self.signals.buffer_updated.emit(len(self.trainer.replay_buffer))
+
+            # Persist buffer so it survives restarts
+            try:
+                self.trainer.replay_buffer.save(buf_path)
+            except Exception:
+                pass  # non-fatal; training continues without saving
 
             if stop.is_set():
                 break
@@ -143,6 +169,13 @@ class TrainingWorker(QObject):
 
             total    = cw + chw + draws
             win_rate = cw / total if total > 0 else 0.0
+
+            ckpt_io.save_training_state(cfg.checkpoint_dir, {
+                "iteration": self._iteration,
+                "board_size": board_size,
+                "size_idx": size_idx,
+                "win_rate": win_rate,
+            })
 
             if candidate_is_better(cw, chw, total, cfg.arena_win_threshold):
                 best_path = cand_path
@@ -202,6 +235,17 @@ class MainWindow(QMainWindow):
         self._connect_signals()
         self.setWindowTitle("HexZero — AlphaZero for Hex")
         self.resize(1200, 740)
+
+        # Restore curriculum ladder from persisted training state
+        ts = ckpt_io.load_training_state(self.cfg.checkpoint_dir)
+        if ts:
+            self._stats.restore_state(
+                ts.get("board_size", self.cfg.initial_board_size),
+                ts.get("win_rate", 0.0),
+            )
+        elif self.cfg.initial_board_size != self.cfg.board_sizes[0]:
+            self._stats.restore_state(self.cfg.initial_board_size, 0.0)
+
         if self._startup_msg:
             self._status_label.setText(self._startup_msg)
 
@@ -216,7 +260,7 @@ class MainWindow(QMainWindow):
             return ""
         try:
             data = ckpt_io.load(best, self._device)
-            self._net.load_state_dict(data["model_state"])
+            ckpt_io.load_weights(self._net, data["model_state"])
             board_size = data.get("metrics", {}).get("board_size")
             if board_size and board_size in self.cfg.board_sizes:
                 self.cfg.initial_board_size = board_size
@@ -399,7 +443,7 @@ class MainWindow(QMainWindow):
             return
         try:
             data = ckpt_io.load(path, self._device)
-            self._net.load_state_dict(data["model_state"])
+            ckpt_io.load_weights(self._net, data["model_state"])
             self._status_label.setText(f"Loaded: {os.path.basename(path)}")
         except Exception as e:
             QMessageBox.critical(self, "Load failed", str(e))

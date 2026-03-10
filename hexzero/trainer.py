@@ -34,7 +34,7 @@ class Trainer:
     ):
         self.cfg = cfg
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.net = net or build_net(cfg, self.device)
+        self.net = net if net is not None else build_net(cfg, self.device)
         self.signals = signals
 
         self.optimizer = torch.optim.Adam(
@@ -54,7 +54,7 @@ class Trainer:
 
     def load_checkpoint(self, path: str) -> None:
         data = ckpt_io.load(path, self.device)
-        self.net.load_state_dict(data["model_state"])
+        ckpt_io.load_weights(self.net, data["model_state"])
         self.optimizer.load_state_dict(data["optimizer_state"])
         self.global_step = data.get("metrics", {}).get("global_step", 0)
 

@@ -14,7 +14,7 @@ import math
 import numpy as np
 from collections.abc import Callable
 
-from hexzero.game import HexState
+from hexzero.game import HexState, SWAP_MOVE
 
 
 class Node:
@@ -93,11 +93,14 @@ class MCTSAgent:
         for _ in range(self.simulations):
             self._simulate(root)
 
-        # Build policy from visit counts
-        pi = np.zeros(n_cells, dtype=np.float32)
+        # Build policy from visit counts (always n_cells+1 to include swap slot)
+        pi = np.zeros(n_cells + 1, dtype=np.float32)
         for move, child in root.children.items():
-            r, c = move
-            pi[r * size + c] = child.N
+            if move == SWAP_MOVE:
+                pi[n_cells] = child.N
+            else:
+                r, c = move
+                pi[r * size + c] = child.N
 
         if pi.sum() > 0:
             if state.move_count < self.temperature_moves and self.temperature > 0:
@@ -120,6 +123,8 @@ class MCTSAgent:
         pi, _, _ = self.search(state, add_noise=add_noise)
         size = state.size
         idx = np.random.choice(len(pi), p=pi)
+        if idx == size * size:
+            return SWAP_MOVE
         return (idx // size, idx % size)
 
     def update_root(self, move: tuple[int, int]) -> None:
@@ -178,8 +183,11 @@ class MCTSAgent:
         size = state.size
 
         for move in legal:
-            r, c = move
-            prior = float(policy[r * size + c])
+            if move == SWAP_MOVE:
+                prior = float(policy[size * size])
+            else:
+                r, c = move
+                prior = float(policy[r * size + c])
             child_state = state.clone()
             child_state.apply_move(move)
             node.children[move] = Node(child_state, prior=prior)
@@ -211,12 +219,13 @@ class MCTSAgent:
 
     def _top_moves(self, node: Node, size: int, k: int = 5) -> list[dict]:
         children = sorted(node.children.items(), key=lambda kv: -kv[1].N)[:k]
-        return [
-            {
-                "move": move,
-                "N": child.N,
-                "Q": round(child.Q, 4),
-                "P": round(child.prior, 4),
-            }
-            for move, child in children
-        ]
+        result = []
+        for move, child in children:
+            result.append({
+                "move":     move,
+                "move_str": "swap" if move == SWAP_MOVE else f"{chr(ord('A') + move[0])}{move[1] + 1}",
+                "N":        child.N,
+                "Q":        round(child.Q, 4),
+                "P":        round(child.prior, 4),
+            })
+        return result

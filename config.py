@@ -57,3 +57,7 @@ class HexZeroConfig:
 
     # Curriculum: when arena win rate on current size exceeds this, unlock next size
     curriculum_threshold: float = 0.60
+
+    # Pie rule (swap rule): after BLACK's first move WHITE may swap colours.
+    # Disable for very early training runs before the net has learned to play.
+    use_pie_rule: bool = True

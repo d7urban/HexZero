@@ -23,6 +23,9 @@ BLACK = 1
 WHITE = -1
 EMPTY = 0
 
+# Sentinel for the pie-rule swap move.  Legal only when move_count == 1.
+SWAP_MOVE = (-1, -1)
+
 _NEIGHBOUR_DELTAS = [(-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0)]
 
 
@@ -56,8 +59,9 @@ class HexState:
     Immutable-ish game state. Clone before mutating for MCTS.
     """
 
-    def __init__(self, size: int):
+    def __init__(self, size: int, pie_rule: bool = False):
         self.size = size
+        self.pie_rule = pie_rule
         self.board = np.zeros((size, size), dtype=np.int8)
         self.current_player = BLACK
         self.move_count = 0
@@ -79,6 +83,7 @@ class HexState:
     def clone(self) -> "HexState":
         s = HexState.__new__(HexState)
         s.size = self.size
+        s.pie_rule = self.pie_rule
         s.board = self.board.copy()
         s.current_player = self.current_player
         s.move_count = self.move_count
@@ -98,9 +103,25 @@ class HexState:
         if self._winner is not None:
             return []
         rows, cols = np.where(self.board == EMPTY)
-        return list(zip(rows.tolist(), cols.tolist(), strict=True))
+        moves = list(zip(rows.tolist(), cols.tolist(), strict=True))
+        if self.pie_rule and self.move_count == 1:
+            moves.append(SWAP_MOVE)
+        return moves
 
     def apply_move(self, move: tuple[int, int]) -> None:
+        if move == SWAP_MOVE:
+            # Pie rule: WHITE takes the BLACK stone, becomes BLACK for the rest.
+            assert self.move_count == 1 and self.last_move is not None
+            r, c = self.last_move
+            self.board[r, c] = WHITE
+            self.move_count += 1
+            self.current_player = BLACK
+            # Rebuild union-find so the stone is now WHITE's
+            n_cells = self.size * self.size
+            self._uf = UnionFind(n_cells + 4)
+            self._reconnect_cell(r, c)
+            return
+
         r, c = move
         assert self.board[r, c] == EMPTY, f"Cell ({r},{c}) already occupied"
         player = self.current_player
@@ -134,6 +155,41 @@ class HexState:
     def winner(self) -> int | None:
         return self._winner
 
+    def winning_path(self) -> set[tuple[int, int]]:
+        """
+        Return the set of cells that form the winning connection.
+        Uses bidirectional BFS: cells reachable from the start edge AND
+        from the end edge (via same-colour neighbours) are on a winning path.
+        Returns an empty set if the game is not yet over.
+        """
+        if self._winner is None:
+            return set()
+
+        player = self._winner
+        size   = self.size
+
+        if player == BLACK:
+            sources = {(0,      c) for c in range(size) if self.board[0,      c] == BLACK}
+            dests   = {(size-1, c) for c in range(size) if self.board[size-1, c] == BLACK}
+        else:
+            sources = {(r, 0)      for r in range(size) if self.board[r, 0]      == WHITE}
+            dests   = {(r, size-1) for r in range(size) if self.board[r, size-1] == WHITE}
+
+        def _bfs(seeds):
+            visited = set(seeds)
+            queue   = list(seeds)
+            while queue:
+                r, c = queue.pop()
+                for dr, dc in _NEIGHBOUR_DELTAS:
+                    nr, nc = r + dr, c + dc
+                    if 0 <= nr < size and 0 <= nc < size and (nr, nc) not in visited:
+                        if self.board[nr, nc] == player:
+                            visited.add((nr, nc))
+                            queue.append((nr, nc))
+            return visited
+
+        return _bfs(sources) & _bfs(dests)
+
     def result_for(self, player: int) -> float:
         """1.0 if player won, -1.0 if lost, 0.0 if not terminal."""
         if self._winner is None:
@@ -150,7 +206,7 @@ class HexState:
         The resulting state has the same strategic content from the
         opposite player's perspective.
         """
-        s = HexState(self.size)
+        s = HexState(self.size, pie_rule=self.pie_rule)
         s.board = -np.rot90(self.board, 2).copy()
         s.current_player = -self.current_player
         s.move_count = self.move_count

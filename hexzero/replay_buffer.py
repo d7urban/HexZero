@@ -8,6 +8,7 @@ Each sample is a dict:
     board_size  : int
 """
 
+import gzip
 import threading
 import random
 import torch
@@ -76,10 +77,13 @@ class ReplayBuffer:
 
     def save(self, path: str) -> None:
         with self._lock:
-            torch.save({"buffer": self._buffer, "idx": self._idx}, path)
+            data = {"buffer": self._buffer, "idx": self._idx}
+        with gzip.open(path, "wb", compresslevel=1) as f:
+            torch.save(data, f)
 
     def load(self, path: str) -> None:
-        data = torch.load(path, weights_only=False)
+        with gzip.open(path, "rb") as f:
+            data = torch.load(f, weights_only=False)
         with self._lock:
             self._buffer = data["buffer"]
             self._idx    = data["idx"]

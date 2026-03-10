@@ -8,8 +8,8 @@ Plane layout:
   1  white_stones        — 1 where WHITE stone, 0 elsewhere
   2  black_2bridge       — 1 where an empty cell completes a 2-bridge for BLACK
   3  white_2bridge       — 1 where an empty cell completes a 2-bridge for WHITE
-  4  black_edge_dist     — BFS distance from cell to BLACK's winning edge (normalised)
-  5  white_edge_dist     — BFS distance from cell to WHITE's winning edge (normalised)
+  4  black_edge_dist     — min BFS distance to either of BLACK's two target edges (normalised)
+  5  white_edge_dist     — min BFS distance to either of WHITE's two target edges (normalised)
   6  black_components    — normalised connected-component label for BLACK stones
   7  white_components    — normalised connected-component label for WHITE stones
 
@@ -100,29 +100,15 @@ def _two_bridge_plane(board: np.ndarray, player: int) -> np.ndarray:
     return plane
 
 
-def _edge_distance_plane(board: np.ndarray, player: int) -> np.ndarray:
-    """
-    BFS shortest distance from each empty or friendly cell to the player's
-    first target edge.  BLACK targets row 0 (top edge); WHITE targets col 0
-    (left edge).  Distance through opponent stones is infinite (excluded).
-    Normalised by board size so values are in [0, 1].
-    """
+def _bfs_from_seeds(board: np.ndarray, seeds: list, player: int) -> np.ndarray:
+    """BFS distance from a set of seed cells, ignoring opponent-occupied cells."""
     size = board.shape[0]
-    INF = size * size + 1
+    INF  = size * size + 1
     dist = np.full((size, size), INF, dtype=np.float32)
-    q = deque()
-
-    if player == BLACK:
-        for c in range(size):
-            if board[0, c] != -player:
-                dist[0, c] = 0.0
-                q.append((0, c))
-    else:
-        for r in range(size):
-            if board[r, 0] != -player:
-                dist[r, 0] = 0.0
-                q.append((r, 0))
-
+    q    = deque()
+    for r, c in seeds:
+        dist[r, c] = 0.0
+        q.append((r, c))
     while q:
         r, c = q.popleft()
         for dr, dc in _NEIGHBOUR_DELTAS:
@@ -131,9 +117,36 @@ def _edge_distance_plane(board: np.ndarray, player: int) -> np.ndarray:
                 if board[nr, nc] != -player and dist[nr, nc] == INF:
                     dist[nr, nc] = dist[r, c] + 1.0
                     q.append((nr, nc))
+    return dist
 
-    # Normalise; cells blocked by opponent stay at 1.0
-    plane = np.minimum(dist / size, 1.0)
+
+def _edge_distance_plane(board: np.ndarray, player: int) -> np.ndarray:
+    """
+    Minimum BFS distance from each cell to either of the player's two target
+    edges, ignoring opponent-occupied cells.
+
+    BLACK connects top (row 0) ↔ bottom (row size-1).
+    WHITE connects left (col 0) ↔ right (col size-1).
+
+    Using min(dist_edge1, dist_edge2) instead of a single edge gives a
+    symmetric, non-monotonic plane: both edge rows/cols score 0, the centre
+    scores highest.  This prevents random network weights from producing a
+    systematic first-row / first-column bias.
+    """
+    size = board.shape[0]
+
+    if player == BLACK:
+        seeds1 = [(0,      c) for c in range(size) if board[0,      c] != -player]
+        seeds2 = [(size-1, c) for c in range(size) if board[size-1, c] != -player]
+    else:
+        seeds1 = [(r, 0)      for r in range(size) if board[r, 0]      != -player]
+        seeds2 = [(r, size-1) for r in range(size) if board[r, size-1] != -player]
+
+    dist1 = _bfs_from_seeds(board, seeds1, player)
+    dist2 = _bfs_from_seeds(board, seeds2, player)
+
+    # Normalise; cells unreachable from an edge (blocked by opponent) stay at 1.0
+    plane = np.minimum(np.minimum(dist1, dist2) / size, 1.0)
     return plane
 
 
