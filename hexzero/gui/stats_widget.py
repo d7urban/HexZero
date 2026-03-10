@@ -166,7 +166,7 @@ class StatsWidget(QWidget):
                 border: 1px solid #444;
                 border-radius: 3px;
                 background: #333;
-                color: #aaa;
+                color: #ffffff;
                 font-size: 10px;
             }
             QProgressBar::chunk {

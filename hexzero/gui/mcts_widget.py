@@ -81,7 +81,7 @@ class MCTSWidget(QWidget):
             ]
 
             # Colour Q value: green if positive, red if negative
-            q_color = QColor(80, 200, 80) if q_val >= 0 else QColor(200, 80, 80)
+            q_color = QColor(100, 230, 100) if q_val >= 0 else QColor(255, 110, 110)
 
             # Shade rows by visit count fraction
             intensity = int(40 + 60 * n_val / max_N)
