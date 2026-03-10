@@ -64,13 +64,13 @@ class DemoWorker(QThread):
                     pass  # checkpoint unreadable mid-write; use current weights
             net.eval()
 
-            def infer_fn(state: HexState, _net=net):
+            def infer_fn(state: HexState, _net=net, _dev=device):
                 feat, size_norm = extract_features(state)
-                x = torch.tensor(feat, dtype=torch.float32).unsqueeze(0)
-                s = torch.tensor([[size_norm]], dtype=torch.float32)
+                x = torch.tensor(feat, dtype=torch.float32).unsqueeze(0).to(_dev)
+                s = torch.tensor([[size_norm]], dtype=torch.float32).to(_dev)
                 with torch.no_grad():
                     log_pi, v = _net(x, s)
-                return torch.exp(log_pi).squeeze(0).numpy(), float(v.item())
+                return torch.exp(log_pi).squeeze(0).cpu().numpy(), float(v.item())
 
             agent = MCTSAgent(
                 infer_fn,
