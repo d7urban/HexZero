@@ -20,6 +20,9 @@ class TrainingSignals(QObject):
     # Emitted after arena: (cand_wins, champ_wins, draws)
     arena_result = pyqtSignal(int, int, int)
 
+    # Emitted after each arena game: (games_done, cand_wins, total_games)
+    arena_progress = pyqtSignal(int, int, int)
+
     # Emitted after a checkpoint is saved: path string
     checkpoint_saved = pyqtSignal(str)
 

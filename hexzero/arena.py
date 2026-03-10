@@ -63,10 +63,12 @@ def run_arena(
     champion_path: str,
     cfg: HexZeroConfig,
     board_size: int,
+    progress_callback=None,
 ) -> tuple[int, int, int]:
     """
     Run cfg.arena_games games between candidate and champion.
     Returns (candidate_wins, champion_wins, draws).
+    progress_callback: optional callable(games_done, cand_wins, total_games).
     """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -108,6 +110,9 @@ def run_arena(
             champ_wins += 1
         else:
             draws += 1
+
+        if progress_callback is not None:
+            progress_callback(game_idx + 1, cand_wins, cfg.arena_games)
 
     return cand_wins, champ_wins, draws
 

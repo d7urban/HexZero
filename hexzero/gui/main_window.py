@@ -126,7 +126,11 @@ class TrainingWorker(QObject):
             self.signals.status_message.emit(
                 f"Iteration {self._iteration} — arena…"
             )
-            cw, chw, draws = run_arena(cand_path, best_path, cfg, board_size)
+            def _arena_progress(done: int, cw_so_far: int, total: int) -> None:
+                self.signals.arena_progress.emit(done, cw_so_far, total)
+
+            cw, chw, draws = run_arena(cand_path, best_path, cfg, board_size,
+                                       progress_callback=_arena_progress)
             self.signals.arena_result.emit(cw, chw, draws)
 
             total    = cw + chw + draws
@@ -297,6 +301,7 @@ class MainWindow(QMainWindow):
         sig.iteration_started.connect(self._stats.on_iteration_started)
         sig.self_play_progress.connect(self._stats.on_self_play_progress)
         sig.arena_result.connect(self._stats.on_arena_result)
+        sig.arena_progress.connect(self._stats.on_arena_progress)
         sig.buffer_updated.connect(self._stats.on_buffer_updated)
         sig.metrics_updated.connect(self._stats.on_metrics)
         sig.board_size_advanced.connect(self._on_size_advanced)

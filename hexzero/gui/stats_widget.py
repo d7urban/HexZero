@@ -211,6 +211,14 @@ class StatsWidget(QWidget):
         self._phase_lbl.setText("Training")
 
     @pyqtSlot(int, int, int)
+    def on_arena_progress(self, done: int, cw: int, total: int) -> None:
+        pct = int(100 * cw / done) if done > 0 else 0
+        colour = "#6acc6a" if pct >= 55 else "#cc6a6a"
+        self._arena_lbl.setText(f"Arena  {cw}/{done} ({pct}%)")
+        self._arena_lbl.setStyleSheet(f"color: {colour};")
+        self._set_phase("Arena", done, total)
+
+    @pyqtSlot(int, int, int)
     def on_arena_result(self, cw: int, chw: int, draws: int) -> None:
         total    = cw + chw + draws
         win_rate = cw / total if total > 0 else 0.0
