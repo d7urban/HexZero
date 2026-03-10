@@ -24,12 +24,12 @@ from PyQt6.QtGui import QPainter, QColor, QPolygonF, QPen, QBrush, QFont
 from hexzero.game import HexState, BLACK, WHITE, EMPTY
 
 # Colours
-_COL_BLACK      = QColor(30,  30,  30)
-_COL_WHITE      = QColor(240, 240, 240)
+_COL_BLACK      = QColor(30,  90,  200)   # blue player
+_COL_WHITE      = QColor(200, 40,  40)    # red player
 _COL_EMPTY      = QColor(200, 190, 160)
 _COL_EMPTY_HVR  = QColor(220, 215, 185)
-_COL_BLACK_EDGE = QColor(20,  20,  80)   # top/bottom border
-_COL_WHITE_EDGE = QColor(180, 30,  30)   # left/right border
+_COL_BLACK_EDGE = QColor(15,  55,  150)   # top/bottom border (blue)
+_COL_WHITE_EDGE = QColor(155, 20,  20)    # left/right border (red)
 _COL_LAST_MOVE  = QColor(80,  200, 80,  200)
 _COL_POLICY_HOT = QColor(255, 80,  0,   160)
 _COL_POLICY_COLD= QColor(0,   80,  255, 40)
@@ -280,7 +280,7 @@ class BoardWidget(QWidget):
         # Stone dot for occupied cells
         if cell_val != EMPTY:
             dot_r = radius * 0.30
-            dot_c = QColor(200, 200, 200) if cell_val == BLACK else QColor(60, 60, 60)
+            dot_c = QColor(140, 185, 255) if cell_val == BLACK else QColor(255, 140, 140)
             painter.setBrush(QBrush(dot_c))
             painter.setPen(Qt.PenStyle.NoPen)
             painter.drawEllipse(center, dot_r, dot_r)
