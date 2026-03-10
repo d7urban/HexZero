@@ -26,7 +26,7 @@ from PyQt6.QtWidgets import (
     QToolBar, QStatusBar, QLabel, QFileDialog,
     QComboBox, QSpinBox, QMessageBox,
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSlot, QObject, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSlot, QObject, pyqtSignal
 from PyQt6.QtGui import QAction
 
 from config import HexZeroConfig
@@ -190,6 +190,8 @@ class MainWindow(QMainWindow):
         # Auto-load best checkpoint before building UI so the board and
         # curriculum ladder reflect the state training was left in.
         self._startup_msg = self._autoload_best()
+
+        self._shutting_down = False
 
         self._trainer:      Trainer | None        = None
         self._worker:       TrainingWorker | None = None
@@ -452,12 +454,44 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def closeEvent(self, event) -> None:
+        if self._shutting_down:
+            # Second call: threads are done (or force-terminated), allow close.
+            event.accept()
+            return
+
+        event.ignore()
+        self._start_shutdown()
+
+    def _start_shutdown(self) -> None:
+        self._shutting_down = True
+        self.setEnabled(False)
+        self.setWindowTitle("HexZero — Stopping…")
+
         if self._worker:
             self._worker.stop()
         if self._demo:
             self._demo.stop()
-        for t in (self._train_thread, self._demo):
-            if t and t.isRunning():
-                t.quit()
-                t.wait(2000)
-        event.accept()
+
+        self._shutdown_ms = 0
+        self._shutdown_timer = QTimer(self)
+        self._shutdown_timer.timeout.connect(self._poll_shutdown)
+        self._shutdown_timer.start(100)
+
+    def _poll_shutdown(self) -> None:
+        self._shutdown_ms += 100
+        train_alive = self._train_thread is not None and self._train_thread.isRunning()
+        demo_alive  = self._demo         is not None and self._demo.isRunning()
+
+        if not train_alive and not demo_alive:
+            self._shutdown_timer.stop()
+            self.close()
+            return
+
+        # After 15 s give up waiting and force-terminate
+        if self._shutdown_ms >= 15_000:
+            self._shutdown_timer.stop()
+            for t in (self._train_thread, self._demo):
+                if t and t.isRunning():
+                    t.terminate()
+                    t.wait(1_000)
+            self.close()
