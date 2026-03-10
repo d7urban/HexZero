@@ -1,0 +1,330 @@
+"""
+MainWindow: assembles the full GUI.
+
+Layout:
+  ┌─────────────────┬──────────────────────┐
+  │   BoardWidget   │   ChartWidget        │
+  │   (left, 60%)   │   (right-top, 60%)   │
+  │                 ├──────────────────────┤
+  │                 │   MCTSWidget         │
+  │                 │   (right-bottom, 40%)│
+  └─────────────────┴──────────────────────┘
+  [Status bar]
+
+Training runs in a QThread.  Self-play results are fed back to the
+main thread via TrainingSignals.
+"""
+
+import os
+import torch
+
+from PyQt6.QtWidgets import (
+    QMainWindow, QSplitter, QToolBar, QStatusBar, QLabel, QFileDialog,
+    QComboBox, QSpinBox, QMessageBox
+)
+from PyQt6.QtCore import Qt, QThread, pyqtSlot, QObject, pyqtSignal
+from PyQt6.QtGui import QAction
+
+from config import HexZeroConfig
+from hexzero.game import HexState
+from hexzero.net import build_net
+from hexzero.trainer import Trainer
+from hexzero.gui.signals import TrainingSignals
+from hexzero.gui.board_widget import BoardWidget
+from hexzero.gui.chart_widget import ChartWidget
+from hexzero.gui.mcts_widget import MCTSWidget
+import hexzero.checkpoint as ckpt_io
+
+
+# ---------------------------------------------------------------------------
+# Worker thread: runs the training + self-play loop without blocking the GUI
+# ---------------------------------------------------------------------------
+
+class TrainingWorker(QObject):
+    finished = pyqtSignal()
+
+    def __init__(self, trainer: Trainer, cfg: HexZeroConfig, signals: TrainingSignals):
+        super().__init__()
+        self.trainer  = trainer
+        self.cfg      = cfg
+        self.signals  = signals
+        self._stop    = False
+        self._iteration = 0
+
+    def stop(self) -> None:
+        self._stop = True
+
+    @pyqtSlot()
+    def run(self) -> None:
+        from hexzero.self_play import run_self_play_parallel
+        from hexzero.arena import run_arena, candidate_is_better
+        import hexzero.checkpoint as ckpt_io
+
+        cfg = self.cfg
+        board_size = cfg.initial_board_size
+
+        # Bootstrap: save initial checkpoint if none exists
+        best_path = ckpt_io.best_checkpoint_path(cfg.checkpoint_dir)
+        if best_path is None:
+            self.signals.status_message.emit("Saving initial checkpoint…")
+            best_path = self.trainer.save_checkpoint(0)
+            self.signals.checkpoint_saved.emit(best_path)
+
+        while not self._stop:
+            self._iteration += 1
+            self.signals.iteration_started.emit(self._iteration)
+            self.signals.status_message.emit(
+                f"Iteration {self._iteration} — self-play ({board_size}×{board_size})…"
+            )
+
+            # 1. Self-play
+            samples = run_self_play_parallel(cfg, best_path, board_size, cfg.games_per_iteration)
+            for s in samples:
+                self.trainer.replay_buffer.add(s)
+
+            if self._stop:
+                break
+
+            # 2. Train
+            self.signals.status_message.emit(f"Iteration {self._iteration} — training…")
+            self.trainer.train_iteration(self._iteration, board_size)
+
+            if self._stop:
+                break
+
+            # 3. Save candidate
+            cand_path = self.trainer.save_checkpoint(self._iteration)
+
+            # 4. Arena
+            self.signals.status_message.emit(f"Iteration {self._iteration} — arena…")
+            cw, chw, draws = run_arena(cand_path, best_path, cfg, board_size)
+            self.signals.arena_result.emit(cw, chw, draws)
+
+            total = cw + chw + draws
+            if candidate_is_better(cw, chw, total, cfg.arena_win_threshold):
+                best_path = cand_path
+                self.signals.checkpoint_saved.emit(best_path)
+                self.signals.status_message.emit(
+                    f"Iteration {self._iteration} — new champion! ({cw}/{total})"
+                )
+            else:
+                self.signals.status_message.emit(
+                    f"Iteration {self._iteration} — champion retained ({chw}/{total})"
+                )
+
+            self.signals.iteration_finished.emit(self._iteration)
+
+        self.finished.emit()
+
+
+# ---------------------------------------------------------------------------
+# Main window
+# ---------------------------------------------------------------------------
+
+class MainWindow(QMainWindow):
+    def __init__(self, cfg: HexZeroConfig):
+        super().__init__()
+        self.cfg     = cfg
+        self.signals = TrainingSignals()
+
+        self._device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self._net    = build_net(cfg, self._device)
+        self._trainer: Trainer | None = None
+        self._worker: TrainingWorker | None = None
+        self._thread: QThread | None = None
+
+        self._build_ui()
+        self._connect_signals()
+        self.setWindowTitle("HexZero — AlphaZero for Hex")
+        self.resize(1200, 700)
+
+    # ------------------------------------------------------------------
+    # UI construction
+    # ------------------------------------------------------------------
+
+    def _build_ui(self) -> None:
+        # Central splitter: board | (charts + mcts)
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.setHandleWidth(4)
+
+        self._board = BoardWidget()
+        splitter.addWidget(self._board)
+
+        right_splitter = QSplitter(Qt.Orientation.Vertical)
+        right_splitter.setHandleWidth(4)
+
+        self._chart = ChartWidget()
+        right_splitter.addWidget(self._chart)
+
+        self._mcts = MCTSWidget()
+        right_splitter.addWidget(self._mcts)
+        right_splitter.setSizes([420, 280])
+
+        splitter.addWidget(right_splitter)
+        splitter.setSizes([540, 660])
+
+        self.setCentralWidget(splitter)
+
+        # Toolbar
+        toolbar = QToolBar("Controls")
+        toolbar.setMovable(False)
+        self.addToolBar(toolbar)
+
+        self._act_start = QAction("▶ Start Training", self)
+        self._act_start.setToolTip("Begin self-play training loop")
+        toolbar.addAction(self._act_start)
+
+        self._act_stop = QAction("■ Stop", self)
+        self._act_stop.setEnabled(False)
+        toolbar.addAction(self._act_stop)
+
+        toolbar.addSeparator()
+
+        self._act_load = QAction("Load Checkpoint", self)
+        toolbar.addAction(self._act_load)
+
+        toolbar.addSeparator()
+
+        toolbar.addWidget(QLabel("  Board size: "))
+        self._size_combo = QComboBox()
+        for s in self.cfg.board_sizes:
+            self._size_combo.addItem(f"{s}×{s}", s)
+        self._size_combo.setCurrentIndex(
+            self.cfg.board_sizes.index(self.cfg.initial_board_size)
+            if self.cfg.initial_board_size in self.cfg.board_sizes else 0
+        )
+        toolbar.addWidget(self._size_combo)
+
+        toolbar.addSeparator()
+        toolbar.addWidget(QLabel("  MCTS sims: "))
+        self._sims_spin = QSpinBox()
+        self._sims_spin.setRange(10, 2000)
+        self._sims_spin.setValue(self.cfg.mcts_simulations)
+        self._sims_spin.setSingleStep(50)
+        toolbar.addWidget(self._sims_spin)
+
+        # Status bar
+        self._status_bar = QStatusBar()
+        self.setStatusBar(self._status_bar)
+        self._status_label = QLabel("Ready")
+        self._status_bar.addWidget(self._status_label)
+
+        self._device_label = QLabel(f"  Device: {self._device}")
+        self._status_bar.addPermanentWidget(self._device_label)
+
+        # Show empty board
+        board_size = self.cfg.initial_board_size
+        self._board.set_state(HexState(board_size))
+
+    # ------------------------------------------------------------------
+    # Signal wiring
+    # ------------------------------------------------------------------
+
+    def _connect_signals(self) -> None:
+        self._act_start.triggered.connect(self._start_training)
+        self._act_stop.triggered.connect(self._stop_training)
+        self._act_load.triggered.connect(self._load_checkpoint)
+        self._size_combo.currentIndexChanged.connect(self._on_size_changed)
+        self._sims_spin.valueChanged.connect(self._on_sims_changed)
+
+        self.signals.metrics_updated.connect(self._chart.update_metrics)
+        self.signals.game_step.connect(self._on_game_step)
+        self.signals.arena_result.connect(self._on_arena_result)
+        self.signals.checkpoint_saved.connect(self._on_checkpoint_saved)
+        self.signals.status_message.connect(self._status_label.setText)
+
+    # ------------------------------------------------------------------
+    # Slots
+    # ------------------------------------------------------------------
+
+    @pyqtSlot()
+    def _start_training(self) -> None:
+        self._act_start.setEnabled(False)
+        self._act_stop.setEnabled(True)
+
+        self._trainer = Trainer(self.cfg, self._net, self._device, self.signals)
+
+        # Load existing checkpoint if available
+        best = ckpt_io.best_checkpoint_path(self.cfg.checkpoint_dir)
+        if best:
+            try:
+                self._trainer.load_checkpoint(best)
+                self._status_label.setText(f"Loaded checkpoint: {os.path.basename(best)}")
+            except Exception as e:
+                self._status_label.setText(f"Could not load checkpoint: {e}")
+
+        self._worker = TrainingWorker(self._trainer, self.cfg, self.signals)
+        self._thread = QThread()
+        self._worker.moveToThread(self._thread)
+        self._thread.started.connect(self._worker.run)
+        self._worker.finished.connect(self._thread.quit)
+        self._worker.finished.connect(self._on_training_finished)
+        self._thread.start()
+
+    @pyqtSlot()
+    def _stop_training(self) -> None:
+        if self._worker:
+            self._worker.stop()
+        self._act_stop.setEnabled(False)
+        self._status_label.setText("Stopping after current iteration…")
+
+    @pyqtSlot()
+    def _on_training_finished(self) -> None:
+        self._act_start.setEnabled(True)
+        self._act_stop.setEnabled(False)
+        self._status_label.setText("Training stopped.")
+
+    @pyqtSlot()
+    def _load_checkpoint(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Load Checkpoint", self.cfg.checkpoint_dir, "PyTorch (*.pt)"
+        )
+        if not path:
+            return
+        try:
+            data = ckpt_io.load(path, self._device)
+            self._net.load_state_dict(data["model_state"])
+            self._status_label.setText(f"Loaded: {os.path.basename(path)}")
+        except Exception as e:
+            QMessageBox.critical(self, "Load failed", str(e))
+
+    @pyqtSlot(object, object, dict)
+    def _on_game_step(self, board_array, policy, mcts_info) -> None:
+        size = int(board_array.shape[0])
+        state = HexState(size)
+        state.board[:] = board_array
+        self._board.set_state(state, policy)
+        self._mcts.update_info(mcts_info)
+
+    @pyqtSlot(int, int, int)
+    def _on_arena_result(self, cw: int, chw: int, draws: int) -> None:
+        total = cw + chw + draws
+        self._status_label.setText(
+            f"Arena: candidate {cw}/{total}  champion {chw}/{total}  draws {draws}"
+        )
+
+    @pyqtSlot(str)
+    def _on_checkpoint_saved(self, path: str) -> None:
+        self._status_label.setText(f"Checkpoint saved: {os.path.basename(path)}")
+
+    @pyqtSlot(int)
+    def _on_size_changed(self, idx: int) -> None:
+        size = self._size_combo.itemData(idx)
+        self.cfg.initial_board_size = size
+        self._board.set_state(HexState(size))
+
+    @pyqtSlot(int)
+    def _on_sims_changed(self, value: int) -> None:
+        self.cfg.mcts_simulations = value
+
+    # ------------------------------------------------------------------
+    # Close
+    # ------------------------------------------------------------------
+
+    def closeEvent(self, event) -> None:
+        if self._worker:
+            self._worker.stop()
+        if self._thread and self._thread.isRunning():
+            self._thread.quit()
+            self._thread.wait(2000)
+        event.accept()
