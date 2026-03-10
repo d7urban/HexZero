@@ -40,14 +40,16 @@ def run_headless(cfg: HexZeroConfig, resume_path: str = None) -> None:
     trainer = Trainer(cfg, net, device)
 
     best_path = resume_path or ckpt_io.best_checkpoint_path(cfg.checkpoint_dir)
+    board_size = cfg.initial_board_size
     if best_path is None:
         print("No checkpoint found — saving initial weights…")
-        best_path = trainer.save_checkpoint(0)
+        best_path = trainer.save_checkpoint(0, board_size)
     else:
         trainer.load_checkpoint(best_path)
-        print(f"Resumed from {best_path}")
-
-    board_size = cfg.initial_board_size
+        saved_size = ckpt_io.load(best_path, device).get("metrics", {}).get("board_size")
+        if saved_size and saved_size in cfg.board_sizes:
+            board_size = saved_size
+        print(f"Resumed from {best_path}  (board {board_size}×{board_size})")
     iteration  = ckpt_io.latest_iteration(cfg.checkpoint_dir)
 
     try:
@@ -68,7 +70,7 @@ def run_headless(cfg: HexZeroConfig, resume_path: str = None) -> None:
                 last = metrics_list[-1]
                 print(f" loss={last['loss']:.4f}  policy_acc={last['policy_acc']:.3f}")
 
-            cand_path = trainer.save_checkpoint(iteration)
+            cand_path = trainer.save_checkpoint(iteration, board_size)
 
             print("  Arena…", end="", flush=True)
             cw, chw, draws = run_arena(cand_path, best_path, cfg, board_size)

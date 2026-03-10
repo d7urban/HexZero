@@ -73,7 +73,7 @@ class TrainingWorker(QObject):
         best_path = ckpt_io.best_checkpoint_path(cfg.checkpoint_dir)
         if best_path is None:
             self.signals.status_message.emit("Saving initial checkpoint…")
-            best_path = self.trainer.save_checkpoint(0)
+            best_path = self.trainer.save_checkpoint(0, board_size)
             self.signals.checkpoint_saved.emit(best_path)
 
         while not self._stop:
@@ -118,7 +118,7 @@ class TrainingWorker(QObject):
             # ----------------------------------------------------------
             # 3. Save candidate checkpoint
             # ----------------------------------------------------------
-            cand_path = self.trainer.save_checkpoint(self._iteration)
+            cand_path = self.trainer.save_checkpoint(self._iteration, board_size)
 
             # ----------------------------------------------------------
             # 4. Arena
@@ -179,6 +179,10 @@ class MainWindow(QMainWindow):
         self._device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self._net    = build_net(cfg, self._device)
 
+        # Auto-load best checkpoint before building UI so the board and
+        # curriculum ladder reflect the state training was left in.
+        self._startup_msg = self._autoload_best()
+
         self._trainer:      Trainer | None        = None
         self._worker:       TrainingWorker | None = None
         self._train_thread: QThread | None        = None
@@ -188,6 +192,28 @@ class MainWindow(QMainWindow):
         self._connect_signals()
         self.setWindowTitle("HexZero — AlphaZero for Hex")
         self.resize(1200, 740)
+        if self._startup_msg:
+            self._status_label.setText(self._startup_msg)
+
+    # ------------------------------------------------------------------
+    # Auto-load
+    # ------------------------------------------------------------------
+
+    def _autoload_best(self) -> str:
+        """Load best.pt into self._net and restore board size. Returns status string."""
+        best = ckpt_io.best_checkpoint_path(self.cfg.checkpoint_dir)
+        if best is None:
+            return ""
+        try:
+            data = ckpt_io.load(best, self._device)
+            self._net.load_state_dict(data["model_state"])
+            board_size = data.get("metrics", {}).get("board_size")
+            if board_size and board_size in self.cfg.board_sizes:
+                self.cfg.initial_board_size = board_size
+            iteration = data.get("iteration", 0)
+            return f"Loaded checkpoint: iter {iteration}, board {self.cfg.initial_board_size}×{self.cfg.initial_board_size}"
+        except Exception as e:
+            return f"Could not load checkpoint: {e}"
 
     # ------------------------------------------------------------------
     # UI construction

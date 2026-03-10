@@ -58,8 +58,10 @@ class Trainer:
         self.optimizer.load_state_dict(data["optimizer_state"])
         self.global_step = data.get("metrics", {}).get("global_step", 0)
 
-    def save_checkpoint(self, iteration: int) -> str:
+    def save_checkpoint(self, iteration: int, board_size: int | None = None) -> str:
         metrics = {"global_step": self.global_step}
+        if board_size is not None:
+            metrics["board_size"] = board_size
         return ckpt_io.save(
             self.net, self.optimizer, iteration, metrics,
             self.cfg.checkpoint_dir, self.cfg.keep_last_n_checkpoints,
