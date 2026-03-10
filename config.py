@@ -21,7 +21,7 @@ class HexZeroConfig:
     num_input_planes: int = 8
 
     # MCTS
-    mcts_simulations: int = 200
+    mcts_simulations: int = 50
     cpuct: float = 1.25
     dirichlet_alpha: float = 0.3
     dirichlet_epsilon: float = 0.25
