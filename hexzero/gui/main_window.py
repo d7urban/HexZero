@@ -18,6 +18,7 @@ The TrainingWorker thread runs self-play → train → arena in the background.
 """
 
 import os
+import threading
 import torch
 
 from PyQt6.QtWidgets import (
@@ -53,11 +54,11 @@ class TrainingWorker(QObject):
         self.trainer    = trainer
         self.cfg        = cfg
         self.signals    = signals
-        self._stop      = False
-        self._iteration = 0
+        self._stop_event = threading.Event()
+        self._iteration  = 0
 
     def stop(self) -> None:
-        self._stop = True
+        self._stop_event.set()
 
     @pyqtSlot()
     def run(self) -> None:
@@ -76,7 +77,8 @@ class TrainingWorker(QObject):
             best_path = self.trainer.save_checkpoint(0, board_size)
             self.signals.checkpoint_saved.emit(best_path)
 
-        while not self._stop:
+        stop = self._stop_event
+        while not stop.is_set():
             self._iteration += 1
             self.signals.iteration_started.emit(self._iteration)
 
@@ -96,12 +98,13 @@ class TrainingWorker(QObject):
             samples = run_self_play_parallel(
                 cfg, best_path, device, board_size, cfg.games_per_iteration,
                 progress_callback=_sp_progress,
+                stop_event=stop,
             )
             for s in samples:
                 self.trainer.replay_buffer.add(s)
             self.signals.buffer_updated.emit(len(self.trainer.replay_buffer))
 
-            if self._stop:
+            if stop.is_set():
                 break
 
             # ----------------------------------------------------------
@@ -112,7 +115,7 @@ class TrainingWorker(QObject):
             )
             self.trainer.train_iteration(self._iteration, board_size)
 
-            if self._stop:
+            if stop.is_set():
                 break
 
             # ----------------------------------------------------------
@@ -130,7 +133,12 @@ class TrainingWorker(QObject):
                 self.signals.arena_progress.emit(done, cw_so_far, total)
 
             cw, chw, draws = run_arena(cand_path, best_path, cfg, board_size,
-                                       progress_callback=_arena_progress)
+                                       progress_callback=_arena_progress,
+                                       stop_event=stop)
+
+            if stop.is_set():
+                break
+
             self.signals.arena_result.emit(cw, chw, draws)
 
             total    = cw + chw + draws

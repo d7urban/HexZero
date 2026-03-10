@@ -64,11 +64,13 @@ def run_arena(
     cfg: HexZeroConfig,
     board_size: int,
     progress_callback=None,
+    stop_event=None,
 ) -> tuple[int, int, int]:
     """
     Run cfg.arena_games games between candidate and champion.
     Returns (candidate_wins, champion_wins, draws).
     progress_callback: optional callable(games_done, cand_wins, total_games).
+    stop_event: optional threading.Event; stops between games when set.
     """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -88,6 +90,8 @@ def run_arena(
     draws = 0
 
     for game_idx in range(cfg.arena_games):
+        if stop_event is not None and stop_event.is_set():
+            break
         # Alternate who plays which colour
         if game_idx % 2 == 0:
             black_infer, white_infer = cand_infer, champ_infer

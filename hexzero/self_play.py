@@ -86,6 +86,7 @@ def run_self_play_parallel(
     board_size: int,
     total_games: int,
     progress_callback=None,
+    stop_event=None,
 ) -> list:
     """
     Load `checkpoint_path` into an InferenceServer on `device`, then
@@ -112,6 +113,8 @@ def run_self_play_parallel(
             return server.infer(features, size_norm)
 
         for _ in range(n_games):
+            if stop_event is not None and stop_event.is_set():
+                break
             try:
                 game_samples = _play_one_game(cfg, infer_fn, board_size)
             except Exception:
