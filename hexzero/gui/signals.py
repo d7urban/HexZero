@@ -29,3 +29,9 @@ class TrainingSignals(QObject):
     # Emitted when iteration starts/ends
     iteration_started = pyqtSignal(int)   # iteration number
     iteration_finished = pyqtSignal(int)
+
+    # Self-play progress: (games_done, games_total)
+    self_play_progress = pyqtSignal(int, int)
+
+    # Buffer fill: total samples currently stored
+    buffer_updated = pyqtSignal(int)

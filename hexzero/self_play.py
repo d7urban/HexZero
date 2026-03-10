@@ -134,9 +134,13 @@ def run_self_play_parallel(
     checkpoint_path: str,
     board_size: int,
     total_games: int,
+    progress_callback=None,
 ) -> list:
     """
     Spawn worker processes, collect all game samples, return flat list.
+
+    progress_callback: optional callable(games_done: int, games_total: int)
+    called after each completed game, from the calling thread.
     """
     ctx = mp.get_context("spawn")
     result_queue = ctx.Queue()
@@ -161,6 +165,8 @@ def run_self_play_parallel(
         if isinstance(item, list):
             all_samples.extend(item)
             collected += 1
+            if progress_callback is not None:
+                progress_callback(collected, total_games)
         # errors are silently skipped; game count will be short
 
     for p in workers:
