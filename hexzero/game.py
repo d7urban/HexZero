@@ -202,18 +202,31 @@ class HexState:
 
     def apply_symmetry(self) -> "HexState":
         """
-        Return a new state equivalent under 180° rotation + player swap.
-        The resulting state has the same strategic content from the
-        opposite player's perspective.
+        Return a new state equivalent under 180° rotation (no colour swap).
+
+        Why 180° rotation is a valid Hex symmetry:
+          Rotating 180° maps (r,c) → (size-1-r, size-1-c).
+          Top edge   ↔ bottom edge  (still BLACK's two target edges)
+          Left edge  ↔ right edge   (still WHITE's two target edges)
+        Player colours and connection objectives are unchanged, so the
+        rotated position has the same game value and the same player-to-move.
+
+        Policy transformation: move (r,c) → (size-1-r, size-1-c), which in
+        flat row-major order equals reversing the first n_cells elements of pi
+        (consistent with the augmentation applied in self_play.py).
         """
-        s = HexState(self.size, pie_rule=self.pie_rule)
-        s.board = -np.rot90(self.board, 2).copy()
-        s.current_player = -self.current_player
+        n = self.size
+        s = HexState(n, pie_rule=self.pie_rule)
+        s.board = np.rot90(self.board, 2).copy()   # no colour negation
+        s.current_player = self.current_player
         s.move_count = self.move_count
-        s._winner = -self._winner if self._winner is not None else None
+        s._winner = self._winner
+        if self.last_move is not None:
+            r, c = self.last_move
+            s.last_move = (n - 1 - r, n - 1 - c)
         # Rebuild union-find from the rotated board
-        for r in range(self.size):
-            for c in range(self.size):
+        for r in range(n):
+            for c in range(n):
                 if s.board[r, c] != EMPTY:
                     s._reconnect_cell(r, c)
         return s

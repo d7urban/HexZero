@@ -154,19 +154,27 @@ def _edge_distance_plane(board: np.ndarray, player: int) -> np.ndarray:
 
 def _component_plane(board: np.ndarray, player: int) -> np.ndarray:
     """
-    Labels each player stone with its connected-component index,
-    normalised by total number of components so values are in (0, 1].
-    Empty and opponent cells are 0.
+    Each player stone is labelled with its component's size as a fraction of
+    the player's total stone count.  Values are in (0, 1]:
+      - a fully connected group of all N stones  → every stone = 1.0
+      - k isolated single stones                 → every stone = 1/total
+      - a group of m stones among total N        → every stone in group = m/N
+
+    Properties:
+      - Order-invariant (no scan-order bias).
+      - Spatially unbiased (only depends on connectivity, not position).
+      - Consistent under 180° rotation (the symmetry used for augmentation).
     """
     size = board.shape[0]
     plane = np.zeros((size, size), dtype=np.float32)
-    visited = np.zeros((size, size), dtype=bool)
-    component_id = 0
+    total = int((board == player).sum())
+    if total == 0:
+        return plane
 
+    visited = np.zeros((size, size), dtype=bool)
     for start_r in range(size):
         for start_c in range(size):
             if board[start_r, start_c] == player and not visited[start_r, start_c]:
-                component_id += 1
                 stack = [(start_r, start_c)]
                 cells = []
                 while stack:
@@ -180,11 +188,9 @@ def _component_plane(board: np.ndarray, player: int) -> np.ndarray:
                         if 0 <= nr < size and 0 <= nc < size:
                             if board[nr, nc] == player and not visited[nr, nc]:
                                 stack.append((nr, nc))
+                val = len(cells) / total
                 for r, c in cells:
-                    plane[r, c] = float(component_id)
-
-    if component_id > 0:
-        plane /= component_id
+                    plane[r, c] = val
     return plane
 
 
