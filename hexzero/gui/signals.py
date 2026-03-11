@@ -47,3 +47,8 @@ class TrainingSignals(QObject):
 
     # Pie rule swap rate after self-play: (swap_games, total_games)
     swap_rate_updated = pyqtSignal(int, int)
+
+    # Loss-plateau progress: (improvement_pct, threshold_pct, has_data)
+    # improvement_pct = relative loss drop over last window (%), lower = more plateaued
+    # has_data = False until enough iterations have accumulated
+    plateau_updated = pyqtSignal(float, float, bool)

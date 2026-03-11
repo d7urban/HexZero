@@ -1,0 +1,59 @@
+Architecture
+ResNet (AlphaZero-style) is the right choice. Convolutional residual blocks work well because:
+
+Local patterns (bridges, two-chains, ladders) are spatially recurring — exactly what convolutions are built for
+Residual connections let you go deep enough to reason about long chains without vanishing gradients
+It's the proven baseline for exactly this class of game
+
+The network has the standard two-headed structure:
+
+Policy head — probability distribution over all cells (+ pass if needed)
+Value head — scalar win probability from current player's perspective
+
+Hex also has 180° rotational symmetry (but not 4-fold like Go), so you can use that for data augmentation during training.
+
+One Net or Many?
+One net, designed to be size-agnostic from the start. Here's why and how:
+The convolutional body is already size-agnostic — conv layers slide over whatever size you give them. The trick is the heads:
+
+Policy head: just a final 1×1 conv outputting one logit per cell. Naturally produces variable-size output. ✓
+Value head: the problem. If you use a fully-connected layer after flattening, you've hardcoded the size. Instead use global average pooling before the FC layers — now it's a fixed-size vector regardless of board dimensions.
+
+You can optionally feed board size as a normalized scalar input to the value head (or use it for FiLM-style conditioning) so the network can calibrate its value estimates — a 0.6 advantage on 7×7 means something different than on 11×11.
+Benefits of one net:
+
+Knowledge transfers — patterns learned on 7×7 bootstrap 11×11 training
+Curriculum learning becomes natural: train small → fine-tune large
+You can do the AlphaStar angle of a single agent playing across "maps"
+
+The one real cost: batch training across sizes requires either padding boards to a max size (wastes compute, can confuse the network about board edges) or dynamic batching by size. Dynamic batching is cleaner — group same-size games into batches during self-play.
+
+Practical Sketch
+Input: (2 + k) × H × W   # 2 color planes + k extra feature planes (e.g. edge distances)
+  → N residual blocks (conv 3×3, BN, ReLU)
+  → Policy head: conv 1×1 → logits (H×W)
+  → Value head: global avg pool → FC → tanh scalar
+Board size fed as conditioning to value head. Single model, trained via self-play curriculum starting at 7×7.
+Want me to scaffold the code?No scaffold yet. How many blocks in the tower do you think?5:31 PMDeciphered tower block quantity for ML projectDeciphered tower block quantity for ML projectFor 11×11 Hex, the complexity sits comfortably between Chess and Go.
+Practical recommendation: 8 blocks.
+The reasoning:
+
+Too few (1–3): Can't reason about connections that span the board. A winning chain on 11×11 might be 11 moves long — you need enough depth to "see" that far in aggregate.
+Sweet spot (6–10): Enough representational depth for global connectivity reasoning, fast enough to generate self-play games quickly. Width matters here too — 128 filters is probably right; 256 is the AlphaZero size but overkill.
+Too many (15+): Training slows down, self-play throughput drops, and you hit diminishing returns fast. The bottleneck on a laptop is games-per-hour during self-play, not model expressiveness.
+
+One thing specific to Hex worth noting: the game has strong global structure (does a path exist?) but relatively shallow tactical depth compared to Chess. A 6-block net with good features (like including a "distance to edge" plane in the input) might outperform a 12-block net without them.
+Concrete starting point: 8 blocks, 128 filters, 3×3 convolutions. Profile self-play throughput first — if you're generating games fast enough, you can experiment wider/deeper. If games are slow, go narrower before going shallower.
+
+The interesting variable for Hex specifically might be the input feature planes — things like which cells are connected to which edge — rather than tower depth.
+
+Strong candidates:
+
+Virtual connection planes — cells that would complete a two-bridge for each player. This is the Hex equivalent of a threat plane; two-bridges are the fundamental tactical unit
+Edge distance — for each cell, how many moves would it take to connect to each of the two edges (for each player). Encodes positional value directly
+Connected component membership — which of your existing groups does each empty cell join if played there
+
+Weaker / probably skip:
+
+Raw "is this cell adjacent to mine" — the network learns this trivially from the board planes
+Anything requiring full path computation — too expensive to compute for every MCTS node

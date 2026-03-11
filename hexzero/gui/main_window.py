@@ -84,6 +84,18 @@ class TrainingWorker(QObject):
     def stop(self) -> None:
         self._stop_event.set()
 
+    def _emit_plateau(self, size_losses: list) -> None:
+        cfg     = self.cfg
+        window  = cfg.min_iters_per_size
+        has_data = len(size_losses) >= window
+        if has_data:
+            recent = size_losses[-window:]
+            start  = recent[0]
+            impr   = max(0.0, (start - recent[-1]) / start * 100) if start > 0 else 0.0
+        else:
+            impr = 0.0
+        self.signals.plateau_updated.emit(impr, cfg.loss_plateau_threshold * 100, has_data)
+
     @pyqtSlot()
     def run(self) -> None:
         from hexzero.arena import candidate_is_better, run_arena
@@ -123,6 +135,7 @@ class TrainingWorker(QObject):
             size_idx   = cfg.board_sizes.index(board_size)
         iters_on_size = ts.get("iters_on_size", 0)
         size_losses: list[float] = ts.get("size_losses", [])
+        self._emit_plateau(size_losses)
 
         stop = self._stop_event
         while not stop.is_set():
@@ -171,6 +184,7 @@ class TrainingWorker(QObject):
             if metrics_list:
                 mean_loss = sum(m["policy_loss"] for m in metrics_list) / len(metrics_list)
                 size_losses.append(mean_loss)
+                self._emit_plateau(size_losses)
 
             if stop.is_set():
                 break
@@ -228,6 +242,7 @@ class TrainingWorker(QObject):
                     board_size    = cfg.board_sizes[size_idx]
                     iters_on_size = 0
                     size_losses   = []
+                    self._emit_plateau(size_losses)
                     self.trainer.reset_lr()
                     self.signals.board_size_advanced.emit(board_size)
                     self.signals.status_message.emit(
@@ -291,13 +306,16 @@ class MainWindow(QMainWindow):
 
         # Restore curriculum ladder from persisted training state
         ts = ckpt_io.load_training_state(self.cfg.checkpoint_dir)
+        restored_size = self.cfg.initial_board_size
         if ts:
-            self._stats.restore_state(
-                ts.get("board_size", self.cfg.initial_board_size),
-                ts.get("iters_on_size", 0),
-            )
+            restored_size = ts.get("board_size", self.cfg.initial_board_size)
+            self._stats.restore_state(restored_size, ts.get("iters_on_size", 0))
         elif self.cfg.initial_board_size != self.cfg.board_sizes[0]:
             self._stats.restore_state(self.cfg.initial_board_size, 0)
+        # Sync sims spin to match the restored board size
+        self._sims_spin.blockSignals(True)
+        self._sims_spin.setValue(self.cfg.sims_for_size(restored_size))
+        self._sims_spin.blockSignals(False)
 
         if self._startup_msg:
             self._status_label.setText(self._startup_msg)
@@ -449,6 +467,7 @@ class MainWindow(QMainWindow):
         sig.board_size_advanced.connect(self._stats.on_board_size_advanced)
         sig.curriculum_progress.connect(self._stats.on_curriculum_progress)
         sig.swap_rate_updated.connect(self._stats.on_swap_rate_updated)
+        sig.plateau_updated.connect(self._stats.on_plateau_updated)
 
     # ------------------------------------------------------------------
     # Slots
@@ -541,13 +560,17 @@ class MainWindow(QMainWindow):
 
     @pyqtSlot(int)
     def _on_size_advanced(self, size: int) -> None:
-        """Curriculum advanced — sync the combo box and demo worker."""
+        """Curriculum advanced — sync the combo box, sims spin, and demo worker."""
         idx = self._size_combo.findData(size)
         if idx >= 0:
             # Block the signal so _on_size_changed doesn't also fire
             self._size_combo.blockSignals(True)
             self._size_combo.setCurrentIndex(idx)
             self._size_combo.blockSignals(False)
+        # Sync sims spin to the new board size's value without triggering scaling
+        self._sims_spin.blockSignals(True)
+        self._sims_spin.setValue(self.cfg.sims_for_size(size))
+        self._sims_spin.blockSignals(False)
         self._board.set_state(HexState(size))
         if self._demo:
             self._demo.set_board_size(size)
