@@ -31,6 +31,7 @@ _COL_EMPTY_HVR  = QColor(220, 215, 185)
 _COL_BLACK_EDGE = QColor(15,  55,  150)   # top/bottom border (blue)
 _COL_WHITE_EDGE = QColor(155, 20,  20)    # left/right border (red)
 _COL_LAST_MOVE  = QColor(80,  200, 80,  200)
+_COL_SWAP_RING  = QColor(255, 210, 0,   220)  # golden ring: "click to swap"
 _COL_POLICY_HOT = QColor(255, 80,  0,   160)
 _COL_POLICY_COLD= QColor(0,   80,  255, 40)
 _COL_WIN_DOT    = QColor(60,  220, 80)    # green dot on winning-path stones
@@ -133,13 +134,18 @@ class BoardWidget(QWidget):
         if self._state is None:
             return None
         radius = self._cell_radius()
-        size = self._state.size
-        best = None
+        size   = self._state.size
+        dx     = radius * math.sqrt(3)
+        dy     = radius * 1.5
+        origin = self._board_origin(radius)   # computed once, not per cell
+        ox, oy = origin.x(), origin.y()
+        best   = None
         best_d = radius * 1.2
         for row in range(size):
             for col in range(size):
-                c = self._cell_center(row, col, radius)
-                d = math.hypot(px - c.x(), py - c.y())
+                cpx = ox + col * dx + row * dx * 0.5
+                cpy = oy + row * dy
+                d = math.hypot(px - cpx, py - cpy)
                 if d < best_d:
                     best_d = d
                     best = (row, col)
@@ -290,6 +296,14 @@ class BoardWidget(QWidget):
             painter.setPen(Qt.PenStyle.NoPen)
             painter.drawEllipse(center, dot_r, dot_r)
 
+        # Swap hint: golden ring around the last stone when pie-rule swap is available.
+        # Signals "click this stone to swap sides".
+        if (state.pie_rule and state.move_count == 1
+                and state.last_move == (row, col)):
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QPen(_COL_SWAP_RING, max(2.0, radius * 0.14)))
+            painter.drawEllipse(center, radius * 0.68, radius * 0.68)
+
     def _draw_coords(self, painter: QPainter, size: int, radius: float) -> None:
         dx = radius * math.sqrt(3)
         font = QFont("Monospace", max(7, int(radius * 0.38)))
@@ -322,6 +336,13 @@ class BoardWidget(QWidget):
         if cell != self._hover:
             self._hover = cell
             self.update()
+        # Pointer cursor when hovering over a stone that can be swapped
+        if (cell is not None and self._state is not None
+                and self._state.pie_rule and self._state.move_count == 1
+                and cell == self._state.last_move):
+            self.setCursor(Qt.CursorShape.PointingHandCursor)
+        else:
+            self.unsetCursor()
 
     def leaveEvent(self, event):
         self._hover = None
@@ -330,10 +351,8 @@ class BoardWidget(QWidget):
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
             cell = self._cell_at_pos(event.position().x(), event.position().y())
-            if cell is not None and self._state is not None:
-                r, c = cell
-                if self._state.board[r, c] == EMPTY and not self._state.is_terminal():
-                    self.move_clicked.emit(r, c)
+            if cell is not None and self._state is not None and not self._state.is_terminal():
+                self.move_clicked.emit(*cell)
 
 
 def _blend_colours(base: QColor, overlay: QColor, alpha: float) -> QColor:

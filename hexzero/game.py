@@ -109,17 +109,14 @@ class HexState:
 
     def apply_move(self, move: tuple[int, int]) -> None:
         if move == SWAP_MOVE:
-            # Pie rule: WHITE takes the BLACK stone, becomes BLACK for the rest.
+            # Pie rule: the second player (WHITE) swaps sides.
+            # WHITE adopts the BLACK role (top→bottom) and inherits the existing
+            # stone — which stays BLACK on the board.  The original first player
+            # (BLACK) now plays as WHITE (left→right) and moves next.
+            # Board and union-find are unchanged; only turn order changes.
             assert self.move_count == 1
-            assert self.last_move is not None
-            r, c = self.last_move
-            self.board[r, c] = WHITE
             self.move_count += 1
-            self.current_player = BLACK
-            # Rebuild union-find so the stone is now WHITE's
-            n_cells = self.size * self.size
-            self._uf = UnionFind(n_cells + 4)
-            self._reconnect_cell(r, c)
+            self.current_player = WHITE
             return
 
         r, c = move

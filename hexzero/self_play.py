@@ -104,6 +104,9 @@ def run_self_play_parallel(
     Returns (all_samples, swap_games, games_played) where swap_games is the
     number of games in which WHITE used the pie rule swap move.
     """
+    if total_games <= 0:
+        return [], 0, 0
+
     net  = build_net(cfg, device, compile=False)
     data = ckpt_io.load(checkpoint_path, device)
     ckpt_io.load_weights(net, data["model_state"])
@@ -116,9 +119,8 @@ def run_self_play_parallel(
     swap_count  = [0]
     first_error: list[BaseException] = []   # at most one entry
 
-    n_workers        = min(cfg.num_self_play_workers, total_games)
-    games_per_worker = total_games // n_workers if n_workers else 0
-    remainder        = total_games % n_workers if n_workers else 0
+    n_workers = min(cfg.num_self_play_workers, total_games)
+    games_per_worker, remainder = divmod(total_games, n_workers)
 
     def worker(n_games: int) -> None:
         def infer_fn(state: HexState):

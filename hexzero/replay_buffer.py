@@ -68,7 +68,7 @@ class ReplayBuffer:
 
         return {
             "features":    features,      # (B, C, H, W)
-            "policy":      policy,        # (B, H*W)
+            "policy":      policy,        # (B, H*W+1)
             "value":       value,         # (B,)
             "size_scalar": size_scalar,   # (B, 1)
         }

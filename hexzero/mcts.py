@@ -187,12 +187,27 @@ class MCTSAgent:
         policy, value = self.infer_fn(state)
         size = state.size
 
+        # Extract raw priors for legal moves only, then renormalise so they
+        # sum to 1.  This prevents probability mass assigned to illegal
+        # actions (e.g. the swap slot after move 1) from weakening PUCT
+        # exploration of the legal moves.
+        raw: dict[tuple[int, int], float] = {}
         for move in legal:
             if move == SWAP_MOVE:
-                prior = float(policy[size * size])
+                raw[move] = float(policy[size * size])
             else:
                 r, c = move
-                prior = float(policy[r * size + c])
+                raw[move] = float(policy[r * size + c])
+
+        prior_sum = sum(raw.values())
+        if prior_sum > 0:
+            scale = 1.0 / prior_sum
+            raw = {m: p * scale for m, p in raw.items()}
+        else:
+            uniform = 1.0 / len(legal)
+            raw = dict.fromkeys(legal, uniform)
+
+        for move, prior in raw.items():
             child_state = state.clone()
             child_state.apply_move(move)
             node.children[move] = Node(child_state, prior=prior)
@@ -218,7 +233,16 @@ class MCTSAgent:
         if not node.children:
             return
         moves = list(node.children.keys())
-        noise = np.random.dirichlet([self.dirichlet_alpha] * len(moves))
+        # Swap is a binary strategic decision (swap or don't), not 1-of-N.
+        # Give it the same expected noise share as all other moves combined by
+        # scaling its alpha by len(moves).  Without this, swap gets 1/N of the
+        # noise and the network can't bootstrap learning to swap or not swap.
+        alphas = [
+            self.dirichlet_alpha * len(moves) if move == SWAP_MOVE
+            else self.dirichlet_alpha
+            for move in moves
+        ]
+        noise = np.random.dirichlet(alphas)
         eps = self.dirichlet_epsilon
         for move, n in zip(moves, noise, strict=True):
             child = node.children[move]

@@ -2,18 +2,19 @@
 play.py — Human vs best checkpoint.
 
 Usage:
-    python play.py                     # play as Black (first move)
-    python play.py --color white       # play as White
+    python play.py                     # play as Blue (first move)
+    python play.py --color white       # play as Red
     python play.py --sims 400          # stronger AI
     python play.py --board-size 9      # override board size
 """
 
 import argparse
 import sys
+import threading
 
 import numpy as np
 import torch
-from PyQt6.QtCore import QObject, Qt, QThread, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import QObject, Qt, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QAction, QColor, QPalette
 from PyQt6.QtWidgets import (
     QApplication,
@@ -37,25 +38,13 @@ from hexzero.mcts import MCTSAgent
 from hexzero.net import build_net
 
 # ---------------------------------------------------------------------------
-# Background AI worker
+# Signal carrier — lives in the main thread; emitted from the worker thread;
+# delivered to the main thread via explicit QueuedConnection.
 # ---------------------------------------------------------------------------
 
-class AIWorker(QObject):
-    """Runs one MCTS search in a background thread."""
-    move_ready = pyqtSignal(object, dict)   # (move, mcts_info)
-
-    def __init__(self, agent: MCTSAgent, state: HexState):
-        super().__init__()
-        self._agent = agent
-        self._state = state
-
-    @pyqtSlot()
-    def run(self) -> None:
-        pi, _, info = self._agent.search(self._state, add_noise=False)
-        size = self._state.size
-        idx  = int(np.argmax(pi))
-        move = SWAP_MOVE if idx == size * size else (idx // size, idx % size)
-        self.move_ready.emit(move, info)
+class _AISignals(QObject):
+    move_ready = pyqtSignal(int, object, dict)  # (generation, move, info)
+    error      = pyqtSignal(int, str)           # (generation, message)
 
 
 # ---------------------------------------------------------------------------
@@ -65,17 +54,28 @@ class AIWorker(QObject):
 class PlayWindow(QMainWindow):
     def __init__(self, cfg: HexZeroConfig, human_color: int, sims: int):
         super().__init__()
-        self.cfg           = cfg
-        self._human_color  = human_color
-        self._sims         = sims
-        self._device       = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self._net          = build_net(cfg, self._device, compile=False)
-        self._state:     HexState | None  = None
-        self._agent:     MCTSAgent | None = None
-        self._ai_thread: QThread | None   = None
-        self._status_override: str | None = None  # shown once in _refresh_ui
+        self.cfg              = cfg
+        self._human_color     = human_color
+        self._sims            = sims
+        self._device          = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self._net             = build_net(cfg, self._device, compile=False)
+        self._state:  HexState | None   = None
+        self._agent:  MCTSAgent | None  = None
+        self._ai_thread: threading.Thread | None = None
+        self._ai_generation: int = 0          # incremented on cancel; guards stale results
+        self._status_override: str | None = None
+
+        # Signal carrier: one instance for the lifetime of the window.
+        # QueuedConnection ensures slots run in the main thread regardless of
+        # which thread emits the signal.
+        self._ai_signals = _AISignals()
+        self._ai_signals.move_ready.connect(
+            self._on_ai_move, Qt.ConnectionType.QueuedConnection)
+        self._ai_signals.error.connect(
+            self._on_ai_error, Qt.ConnectionType.QueuedConnection)
 
         msg = self._load_checkpoint()
+        threading.Thread(target=self._warmup_net, daemon=True).start()
         self._build_ui()
         self._status_lbl.setText(msg or "Ready")
         self._new_game()
@@ -103,6 +103,20 @@ class PlayWindow(QMainWindow):
         finally:
             self._net.eval()
 
+    def _warmup_net(self) -> None:
+        """Forward pass on dummy input so CUDA kernels are compiled before the
+        first real inference.  Runs in a daemon thread so startup is instant;
+        if the AI turn starts before warm-up finishes, PyTorch serialises the
+        two calls internally — no deadlock possible with plain threading.Thread."""
+        size = self.cfg.initial_board_size
+        with torch.no_grad():
+            x = torch.zeros(1, self.cfg.num_input_planes, size, size,
+                            dtype=torch.float32, device=self._device)
+            s = torch.zeros(1, 1, dtype=torch.float32, device=self._device)
+            self._net(x, s)
+            if self._device.type == "cuda":
+                torch.cuda.synchronize()
+
     def _make_infer_fn(self):
         net, device = self._net, self._device
         def infer_fn(state: HexState):
@@ -119,9 +133,10 @@ class PlayWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _cancel_ai(self) -> None:
-        if self._ai_thread and self._ai_thread.isRunning():
-            self._ai_thread.quit()
-            self._ai_thread.wait(2000)
+        # Bump the generation counter so any in-flight result is silently
+        # ignored when it arrives via the queued signal.  The daemon thread
+        # runs to completion on its own — we don't block on it.
+        self._ai_generation += 1
         self._ai_thread = None
 
     def _new_game(self) -> None:
@@ -162,16 +177,23 @@ class PlayWindow(QMainWindow):
 
     def _start_ai_turn(self) -> None:
         self._refresh_ui()
-        worker = AIWorker(self._agent, self._state)
-        thread = QThread(self)
-        worker.moveToThread(thread)
-        thread.started.connect(worker.run)
-        worker.move_ready.connect(self._on_ai_move)
-        worker.move_ready.connect(thread.quit)
-        thread.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
-        self._ai_thread = thread
-        thread.start()
+        gen   = self._ai_generation
+        agent = self._agent
+        state = self._state
+        sigs  = self._ai_signals
+
+        def _run() -> None:
+            try:
+                pi, _, info = agent.search(state, add_noise=False)
+                size = state.size
+                idx  = int(np.argmax(pi))
+                move = SWAP_MOVE if idx == size * size else (idx // size, idx % size)
+                sigs.move_ready.emit(gen, move, info)
+            except Exception as exc:
+                sigs.error.emit(gen, str(exc))
+
+        self._ai_thread = threading.Thread(target=_run, daemon=True)
+        self._ai_thread.start()
 
     # ------------------------------------------------------------------
     # Slots
@@ -182,6 +204,12 @@ class PlayWindow(QMainWindow):
         if self._state is None or self._state.is_terminal():
             return
         if self._state.current_player != self._human_color:
+            return
+        # Clicking the last-placed stone while swap is legal → pie rule swap
+        if (self.cfg.use_pie_rule
+                and self._state.move_count == 1
+                and self._state.last_move == (row, col)):
+            self._apply_move(SWAP_MOVE)
             return
         if (row, col) not in self._state.legal_moves():
             return
@@ -195,16 +223,23 @@ class PlayWindow(QMainWindow):
             return
         self._apply_move(SWAP_MOVE)
 
-    @pyqtSlot(object, dict)
-    def _on_ai_move(self, move, info: dict) -> None:
+    @pyqtSlot(int, object, dict)
+    def _on_ai_move(self, gen: int, move, info: dict) -> None:
+        if gen != self._ai_generation:
+            return  # result from a cancelled turn — discard
         if self._state is None or self._state.is_terminal():
             return
         self._mcts_widget.update_info(info)
         if move == SWAP_MOVE:
-            # Announce the swap; _refresh_ui will use this message once.
-            new_color = "White" if self._human_color == WHITE else "Black"
+            new_color = "Red" if self._human_color == WHITE else "Blue"
             self._status_override = f"AI swapped — you now play {new_color}."
         self._apply_move(move)
+
+    @pyqtSlot(int, str)
+    def _on_ai_error(self, gen: int, msg: str) -> None:
+        if gen != self._ai_generation:
+            return
+        self._status_lbl.setText(f"AI error: {msg}")
 
     @pyqtSlot(int)
     def _on_size_changed(self, idx: int) -> None:
@@ -241,7 +276,7 @@ class PlayWindow(QMainWindow):
             else:
                 self._status_lbl.setText("AI wins.")
         elif is_human:
-            color_name = "Black" if self._human_color == BLACK else "White"
+            color_name = "Blue" if self._human_color == BLACK else "Red"
             hint = " (or click Swap)" if can_swap else ""
             self._status_lbl.setText(f"Your turn ({color_name}){hint} — click a cell.")
         else:
@@ -261,8 +296,8 @@ class PlayWindow(QMainWindow):
         toolbar.addSeparator()
         toolbar.addWidget(QLabel("  Play as: "))
         self._color_combo = QComboBox()
-        self._color_combo.addItem("Black (first)", BLACK)
-        self._color_combo.addItem("White (second)", WHITE)
+        self._color_combo.addItem("Blue (first)", BLACK)
+        self._color_combo.addItem("Red (second)", WHITE)
         self._color_combo.setCurrentIndex(0 if self._human_color == BLACK else 1)
         self._color_combo.currentIndexChanged.connect(self._on_color_changed)
         toolbar.addWidget(self._color_combo)
@@ -292,7 +327,7 @@ class PlayWindow(QMainWindow):
         toolbar.addSeparator()
         self._swap_btn = QPushButton("Swap sides")
         self._swap_btn.setToolTip(
-            "Pie rule: take Black's first stone as your own and play as Black."
+            "Pie rule: take Blue's first stone as your own and play as Blue."
         )
         self._swap_btn.setVisible(False)
         self._swap_btn.clicked.connect(self._on_swap_clicked)

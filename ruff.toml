@@ -3,6 +3,7 @@ line-length = 100
 [lint.per-file-ignores]
 "hexzero/gui/board_widget.py" = ["E501"]   # color interpolation math is wider than 100 chars
 "hexzero/gui/stats_widget.py" = ["E501"]   # ASCII art in module docstring
+"tests/*.py" = ["PT"]                      # unittest.TestCase style; pytest-style assertions don't apply
 
 [lint]
 select = ["ALL"]
