@@ -3,7 +3,7 @@ play.py — Human vs best checkpoint.
 
 Usage:
     python play.py                     # play as Blue (first move)
-    python play.py --color white       # play as Red
+    python play.py --color red         # play as Red
     python play.py --sims 400          # stronger AI
     python play.py --board-size 9      # override board size
 """
@@ -370,8 +370,8 @@ def parse_args() -> argparse.Namespace:
                    help="Board size override (default: from checkpoint)")
     p.add_argument("--sims",       type=int, default=200,
                    help="MCTS simulations per AI move (default: 200)")
-    p.add_argument("--color",      choices=["black", "white"], default="black",
-                   help="Your colour (default: black)")
+    p.add_argument("--color",      choices=["blue", "red"], default="blue",
+                   help="Your colour (default: blue)")
     return p.parse_args()
 
 
@@ -382,7 +382,7 @@ def main() -> None:
     if args.board_size is not None:
         cfg.initial_board_size = args.board_size
 
-    human_color = BLACK if args.color == "black" else WHITE
+    human_color = BLACK if args.color == "blue" else WHITE
 
     app = QApplication(sys.argv)
     app.setStyle("Fusion")

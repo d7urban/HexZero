@@ -191,7 +191,7 @@ Click **▶ Start Training** to begin the self-play loop. The best checkpoint is
 
 ```bash
 python play.py                    # play as Blue (first move)
-python play.py --color white      # play as Red (second move)
+python play.py --color red        # play as Red (second move)
 python play.py --sims 400         # stronger AI
 python play.py --board-size 9
 ```
