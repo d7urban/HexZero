@@ -45,7 +45,7 @@ Tower: 8 × ResBlock(128 filters, 3×3, skip connection)
 
 **Swap logit**: the policy head outputs one extra scalar (from the global pool) for the pie-rule swap action, so the policy distribution is over H×W+1 actions.
 
-The network is compiled with `torch.compile` at build time for fused kernel execution, with TF32 tensor cores enabled on Ampere+ GPUs.
+TF32 tensor cores are enabled on Ampere+ GPUs (`torch.set_float32_matmul_precision("high")`). `torch.compile` is used in headless mode and `play.py` for fused kernel execution; it is disabled in GUI mode because dynamo's global bytecode patcher is not thread-safe across the concurrent training, demo, and arena threads.
 
 ### Input Feature Planes
 
@@ -57,12 +57,14 @@ The network is compiled with `torch.compile` at build time for fused kernel exec
 | `white_2bridge` | Empty cells that are carriers of a WHITE two-bridge |
 | `black_edge_dist` | min BFS distance to either of BLACK's two target edges (normalised) |
 | `white_edge_dist` | min BFS distance to either of WHITE's two target edges (normalised) |
-| `black_components` | Connected component label for BLACK stones (normalised) |
-| `white_components` | Connected component label for WHITE stones (normalised) |
+| `black_components` | Component size / total BLACK stones for each BLACK stone (0 elsewhere) |
+| `white_components` | Component size / total WHITE stones for each WHITE stone (0 elsewhere) |
 
 The edge-distance planes use the minimum distance to **either** target edge (not just one), giving a symmetric, non-monotonic signal that avoids biasing the untrained network toward a particular edge of the board.
 
-Two-bridges are the fundamental tactical unit of Hex — a pair of stones with two shared empty neighbours forming a virtually unbreakable connection. Explicit planes let the network learn connection-based reasoning far faster than from raw board state alone.
+Two-bridges are the fundamental tactical unit of Hex — a pair of stones with two shared empty neighbours forming a virtually unbreakable connection. Explicit planes let the network learn connection-based reasoning far faster than from raw board state alone. All six canonical 2-bridge patterns are covered (one per adjacent pair of hex directions).
+
+The component planes encode **how consolidated** a player's position is: stones in a large connected group score near 1.0, isolated stones score near 0. This is order-invariant and spatially unbiased — only connectivity matters, not where on the board the group sits.
 
 ### Pie Rule (Swap Rule)
 
@@ -80,7 +82,7 @@ PUCT(s, a) = Q(s, a) + c_puct · P(s, a) · √N(s) / (1 + N(s, a))
 
 - Dirichlet noise at the root during self-play (α=0.3, ε=0.25)
 - Temperature-based move sampling for the first 20 moves, greedy thereafter
-- Subtree reuse across moves within a game
+- Subtree reuse across moves within a game (keyed on `move_count` to survive state mutation)
 - Policy vector is always H×W+1; swap slot is masked out when not legal
 
 ### Self-play
@@ -94,7 +96,7 @@ repeat:
   1. Self-play      — worker threads play games via shared InferenceServer
   2. Augment        — each game doubled via 180° rotation
   3. Buffer         — samples added to gzip-compressed replay buffer (100k cap, persisted)
-  4. Train          — 200 gradient steps, dynamic batching by board size
+  4. Train          — 200 AdamW gradient steps, dynamic batching by board size
   5. Arena          — candidate vs champion (40 games, alternating colours)
   6. Promote        — replace champion if candidate wins ≥ 55% of games
 ```
@@ -103,7 +105,12 @@ The replay buffer is saved to `checkpoints/replay_buffer.pt.gz` after each self-
 
 ### Curriculum
 
-Training starts on 7×7. When the agent achieves ≥ 60% win rate in the arena against the prior champion on the current size, the next size (9×9, then 11×11) is unlocked. Knowledge transfers because the convolutional weights are size-agnostic. The current board size and last arena win rate are persisted in `checkpoints/training_state.json` so the curriculum ladder is restored correctly on restart.
+Training starts on 7×7. Two conditions must both be met to advance to the next size:
+
+1. Arena win rate ≥ `curriculum_threshold` (default 60%) against the prior champion.
+2. At least `min_iters_per_size` (default 5) iterations completed on the current size — prevents advancing after a single easy win over the random-weight baseline in iteration 1.
+
+The live demo board follows the curriculum immediately when the size advances, abandoning the current game mid-play. Knowledge transfers because the convolutional weights are size-agnostic. Board size, win rate, and per-size iteration count are persisted in `checkpoints/training_state.json` so the curriculum ladder is restored correctly on restart.
 
 ---
 
@@ -215,6 +222,7 @@ All hyperparameters live in `config.py` as a single `HexZeroConfig` dataclass �
 | `games_per_iteration` | 100 | Self-play games before each training round |
 | `arena_win_threshold` | 0.55 | Candidate win rate needed to replace champion |
 | `curriculum_threshold` | 0.60 | Arena win rate to unlock the next board size |
+| `min_iters_per_size` | 5 | Minimum iterations on current size before promotion |
 | `use_pie_rule` | True | Enable swap rule (disable for very early training) |
 | `num_self_play_workers` | cpu\_count/2 | Worker threads sharing the InferenceServer |
 
