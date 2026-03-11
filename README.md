@@ -68,7 +68,7 @@ The component planes encode **how consolidated** a player's position is: stones 
 
 ### Pie Rule (Swap Rule)
 
-After BLACK's first move, WHITE may invoke the swap rule: they take BLACK's stone as their own and play as BLACK for the rest of the game. This eliminates the first-mover advantage.
+After Blue's first move, Red may invoke the swap rule: they take Blue's stone as their own and play as Blue for the rest of the game. This eliminates the first-mover advantage.
 
 The swap action is the H×W+1-th output of the policy head — a global scalar logit, since the decision requires reasoning about the whole position rather than a specific cell. Controlled by `use_pie_rule` in config.
 
@@ -190,13 +190,13 @@ Click **▶ Start Training** to begin the self-play loop. The best checkpoint is
 ### Play vs AI
 
 ```bash
-python play.py                    # play as Black (first move)
-python play.py --color white      # play as White
+python play.py                    # play as Blue (first move)
+python play.py --color white      # play as Red (second move)
 python play.py --sims 400         # stronger AI
 python play.py --board-size 9
 ```
 
-Loads the best checkpoint automatically. The board and MCTS viewer are shared with the training GUI. When the pie rule is enabled and you play as White, a **Swap sides** button appears after Black's first move.
+Loads the best checkpoint automatically. The board and MCTS viewer are shared with the training GUI. When the pie rule is enabled and you play as Red, click Blue's opening stone to swap sides.
 
 ### Headless mode
 
@@ -240,12 +240,12 @@ All hyperparameters live in `config.py` as a single `HexZeroConfig` dataclass �
 
 ## Game Rules (Hex)
 
-Two players — BLACK and WHITE — alternate placing stones on a rhombus-shaped board of hexagonal cells.
+Two players — **Blue** (first) and **Red** (second) — alternate placing stones on a rhombus-shaped board of hexagonal cells.
 
-- **BLACK** wins by forming a connected chain from the **top edge** to the **bottom edge**.
-- **WHITE** wins by connecting the **left edge** to the **right edge**.
+- **Blue** wins by forming a connected chain from the **top edge** to the **bottom edge**.
+- **Red** wins by connecting the **left edge** to the **right edge**.
 - Every cell is eventually filled; draws are mathematically impossible (Hex is a [strategy-stealing](https://en.wikipedia.org/wiki/Strategy-stealing_argument) game).
-- **Pie rule**: after BLACK's first move, WHITE may swap colours to neutralise the first-move advantage.
+- **Pie rule**: after Blue's first move, Red may swap colours to neutralise the first-move advantage.
 
 The first player has a theoretical winning advantage on all sizes, but the winning strategy is unknown for boards larger than a few cells, making self-play meaningful.
 
