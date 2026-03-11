@@ -45,32 +45,34 @@ _SIZE_MAX = 19
 #
 # Simpler approach: enumerate all pairs of cells that are exactly 2 hex-steps
 # apart and share the same carrier pair.  For a hex grid the canonical list is:
-_TWO_BRIDGE_PATTERNS = [
-    # (anchor_delta, carrier1_delta, carrier2_delta)
-    # Each pattern: if board[r+ar, c+ac] == player AND board[r+c1r,c+c1c] == EMPTY
-    #               AND board[r+c2r,c+c2c] == EMPTY, mark (r,c) as 2-bridge cell.
-    # But more useful: mark the EMPTY cells in the carrier as 2-bridge threats.
-    # Pattern 1: bridge over (r,c)↔(r-2,c+1) via carriers (r-1,c) and (r-1,c+1)
-    ((-2,  1), (-1,  0), (-1,  1)),
-    # Pattern 2: bridge over (r,c)↔(r-2,c-1) via carriers (r-1,c-1) and (r-1,c)
-    ((-2, -1), (-1, -1), (-1,  0)),
-    # Pattern 3: bridge over (r,c)↔(r, c-2) via carriers (r-1,c-1) and (r+1,c-1) — wrong
-    # Actually let's use the standard 6-direction pairs:
-    # For each pair of hex neighbours-of-neighbours sharing exactly 2 common neighbours:
-]
-
-# Re-derive cleanly.  In a hex grid, two cells are "2-bridge distance" apart if
-# they share exactly 2 common neighbours.  All such pairs and their shared
-# neighbours:
+# Two-bridge patterns derived from first principles.
+#
+# Two cells A=(r,c) and B=(r+dr,c+dc) form a 2-bridge when they share exactly
+# two common hex-neighbours c1 and c2 (the "carriers").  If both carriers are
+# empty, the bridge is a virtual connection: whoever threatens one carrier gets
+# answered in the other.
+#
+# Derivation: the 6 hex directions are the adjacent pairs
+#   d_i and d_{i+1 mod 6}.  Their sum gives the bridge endpoint; the two
+#   directions individually give the carriers.
+#
+# _NEIGHBOUR_DELTAS = [(-1,0),(-1,1),(0,-1),(0,1),(1,-1),(1,0)]
+# Adjacent pairs and their bridge:
+#   (-1,0)+(-1,1) = (-2, 1)  carriers (-1,0),(-1,1)
+#   (-1,1)+(0, 1) = (-1, 2)  carriers (-1,1),(0, 1)
+#   (0, 1)+(1, 0) = ( 1, 1)  carriers (0, 1),(1, 0)
+#   (1, 0)+(1,-1) = ( 2,-1)  carriers (1, 0),(1,-1)
+#   (1,-1)+(0,-1) = ( 1,-2)  carriers (1,-1),(0,-1)
+#   (0,-1)+(-1,0) = (-1,-1)  carriers (0,-1),(-1,0)
 _BRIDGE_PAIRS = [
     # (dr_b, dc_b, dr_c1, dc_c1, dr_c2, dc_c2)
     # "b" is the OTHER stone; c1,c2 are the two shared neighbours (the carrier)
     (-2,  1,  -1,  0,  -1,  1),
-    (-2, -1,  -1, -1,  -1,  0),
-    ( 0,  2,  -1,  1,   1,  1),
-    ( 0, -2,  -1, -1,   1, -1),
-    ( 2, -1,   1, -1,   1,  0),
-    ( 2,  1,   1,  0,   1,  1),
+    (-1,  2,  -1,  1,   0,  1),
+    ( 1,  1,   0,  1,   1,  0),
+    ( 2, -1,   1,  0,   1, -1),
+    ( 1, -2,   1, -1,   0, -1),
+    (-1, -1,   0, -1,  -1,  0),
 ]
 
 

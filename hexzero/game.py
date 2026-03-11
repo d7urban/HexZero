@@ -179,7 +179,7 @@ class HexState:
             visited = set(seeds)
             queue   = list(seeds)
             while queue:
-                r, c = queue.pop()
+                r, c = queue.pop()  # DFS order; result is the same as BFS here
                 for dr, dc in _NEIGHBOUR_DELTAS:
                     nr, nc = r + dr, c + dc
                     if 0 <= nr < size and 0 <= nc < size and (nr, nc) not in visited:

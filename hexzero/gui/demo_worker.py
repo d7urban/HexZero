@@ -103,8 +103,8 @@ class DemoWorker(QThread):
                 continue
 
             if state.is_terminal() and not self._stop:
-                # Show the finished board for a moment
-                empty_pi = np.zeros(state.size ** 2, dtype=np.float32)
+                # Show the finished board for a moment (n_cells+1 to match in-play pi)
+                empty_pi = np.zeros(state.size ** 2 + 1, dtype=np.float32)
                 self.signals.game_step.emit(state.board.copy(), empty_pi, {})
                 self.signals.game_finished.emit(state.winner() or 0, state.move_count)
                 self.msleep(_GAME_PAUSE_MS)

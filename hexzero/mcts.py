@@ -80,7 +80,7 @@ class MCTSAgent:
         size = state.size
         n_cells = size * size
 
-        if self._root is None or self._root.state is not state:
+        if self._root is None or self._root.state.move_count != state.move_count:
             self._root = Node(state)
 
         root = self._root

@@ -37,7 +37,7 @@ class Trainer:
         self.net = net if net is not None else build_net(cfg, self.device)
         self.signals = signals
 
-        self.optimizer = torch.optim.Adam(
+        self.optimizer = torch.optim.AdamW(
             self.net.parameters(),
             lr=cfg.learning_rate,
             weight_decay=cfg.weight_decay,
