@@ -15,10 +15,10 @@ from typing import TYPE_CHECKING
 import torch
 import torch.nn.functional as F
 
+import hexzero.checkpoint as ckpt_io
 from config import HexZeroConfig
 from hexzero.net import HexNet, build_net
 from hexzero.replay_buffer import ReplayBuffer
-import hexzero.checkpoint as ckpt_io
 
 if TYPE_CHECKING:
     from hexzero.gui.signals import TrainingSignals
@@ -42,10 +42,10 @@ class Trainer:
             lr=cfg.learning_rate,
             weight_decay=cfg.weight_decay,
         )
-        self.scheduler = torch.optim.lr_scheduler.StepLR(
+        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             self.optimizer,
-            step_size=cfg.lr_decay_steps,
-            gamma=cfg.lr_decay_gamma,
+            T_max=cfg.lr_cosine_steps,
+            eta_min=cfg.lr_min,
         )
 
         self.replay_buffer = ReplayBuffer(cfg.replay_buffer_capacity)
@@ -65,6 +65,18 @@ class Trainer:
         return ckpt_io.save(
             self.net, self.optimizer, iteration, metrics,
             self.cfg.checkpoint_dir, self.cfg.keep_last_n_checkpoints,
+        )
+
+    def reset_lr(self) -> None:
+        """Reset LR to initial value and restart the cosine schedule.
+        Called at curriculum advances so the network can adapt quickly to
+        the new board size without starting from a decayed LR floor."""
+        for pg in self.optimizer.param_groups:
+            pg["lr"] = self.cfg.learning_rate
+        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            self.optimizer,
+            T_max=self.cfg.lr_cosine_steps,
+            eta_min=self.cfg.lr_min,
         )
 
     def train_step(self, board_size: int | None = None) -> dict | None:
@@ -129,7 +141,7 @@ class Trainer:
 
         return metrics
 
-    def train_iteration(self, iteration: int, board_size: int | None = None) -> list:
+    def train_iteration(self, _iteration: int, board_size: int | None = None) -> list:
         """
         Run cfg.train_steps_per_iteration gradient updates.
         Returns list of per-step metrics.

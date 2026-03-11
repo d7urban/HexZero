@@ -11,14 +11,15 @@ infer_fn signature:
 """
 
 import math
-import numpy as np
 from collections.abc import Callable
 
-from hexzero.game import HexState, SWAP_MOVE
+import numpy as np
+
+from hexzero.game import SWAP_MOVE, HexState
 
 
 class Node:
-    __slots__ = ("state", "prior", "N", "W", "children", "is_expanded")
+    __slots__ = ("N", "W", "children", "is_expanded", "prior", "state")
 
     def __init__(self, state: HexState, prior: float = 0.0):
         self.state = state
@@ -197,15 +198,17 @@ class MCTSAgent:
 
     def _backup(self, root: Node, path: list, leaf_value: float) -> None:
         # leaf_value is from the perspective of the player at the leaf node.
-        # As we go back up, alternate sign each ply.
+        # Negate once per ply as we walk back toward root; after the loop v has
+        # been negated len(path) times, which puts it in root's player's frame.
         root.N += 1
-        root.W += leaf_value  # approximate; root W not used for move selection
 
         v = leaf_value
         for child, _ in reversed(path):
             v = -v
             child.N += 1
             child.W += v
+
+        root.W += v  # v is now from root.current_player's perspective
 
     def _add_dirichlet_noise(self, node: Node) -> None:
         if not node.children:
@@ -223,7 +226,8 @@ class MCTSAgent:
         for move, child in children:
             result.append({
                 "move":     move,
-                "move_str": "swap" if move == SWAP_MOVE else f"{chr(ord('A') + move[0])}{move[1] + 1}",
+                "move_str": ("swap" if move == SWAP_MOVE
+                             else f"{chr(ord('A') + move[0])}{move[1] + 1}"),
                 "N":        child.N,
                 "Q":        round(child.Q, 4),
                 "P":        round(child.prior, 4),

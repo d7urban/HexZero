@@ -13,13 +13,13 @@ import threading
 import numpy as np
 import torch
 
-from config import HexZeroConfig
-from hexzero.game import HexState, SWAP_MOVE
-from hexzero.features import extract_features
-from hexzero.net import build_net
-from hexzero.mcts import MCTSAgent
-from hexzero.inference_server import InferenceServer
 import hexzero.checkpoint as ckpt_io
+from config import HexZeroConfig
+from hexzero.features import extract_features
+from hexzero.game import SWAP_MOVE, HexState
+from hexzero.inference_server import InferenceServer
+from hexzero.mcts import MCTSAgent
+from hexzero.net import build_net
 
 
 def _play_one_game(

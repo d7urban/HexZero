@@ -103,14 +103,22 @@ repeat:
 
 The replay buffer is saved to `checkpoints/replay_buffer.pt.gz` after each self-play phase and reloaded on restart, eliminating the cold-start penalty.
 
+### Learning Rate Schedule
+
+AdamW with a cosine annealing schedule: LR decays from `learning_rate` (1e-3) to `lr_min` (1e-4) over `lr_cosine_steps` (1 000) gradient steps, then holds at the floor. The schedule resets to `learning_rate` at each curriculum advance so the network can adapt quickly to the larger board without starting from the decayed floor.
+
+Self-play data is non-stationary (the policy distribution shifts as the network improves), which argues against aggressive step-decay schedules. The cosine envelope provides a gentle, smooth decay that is robust to this non-stationarity.
+
 ### Curriculum
 
 Training starts on 7×7. Two conditions must both be met to advance to the next size:
 
-1. Arena win rate ≥ `curriculum_threshold` (default 60%) against the prior champion.
-2. At least `min_iters_per_size` (default 5) iterations completed on the current size — prevents advancing after a single easy win over the random-weight baseline in iteration 1.
+1. At least `min_iters_per_size` (default 5) iterations completed on the current size.
+2. Policy loss has **plateaued**: the relative improvement in mean policy loss over the last `min_iters_per_size` iterations is below `loss_plateau_threshold` (default 3%). This detects that the network has extracted most of what it can learn at the current board size.
 
-The live demo board follows the curriculum immediately when the size advances, abandoning the current game mid-play. Knowledge transfers because the convolutional weights are size-agnostic. Board size, win rate, and per-size iteration count are persisted in `checkpoints/training_state.json` so the curriculum ladder is restored correctly on restart.
+The arena win rate is used only to decide whether to promote the candidate checkpoint to champion — it is not used as a curriculum signal. With 50 MCTS simulations, the win rate is near-binary (either ~50% when models are equal or ~100% when the candidate is meaningfully better), making it an uninformative threshold for curriculum advancement.
+
+The live demo board follows the curriculum immediately when the size advances, abandoning the current game mid-play. Knowledge transfers because the convolutional weights are size-agnostic. Board size and per-size iteration count are persisted in `checkpoints/training_state.json` so the curriculum ladder is restored correctly on restart.
 
 ---
 
@@ -221,8 +229,10 @@ All hyperparameters live in `config.py` as a single `HexZeroConfig` dataclass �
 | `mcts_simulations` | 50 | Quality vs speed; 50 is fast, 400+ is strong |
 | `games_per_iteration` | 100 | Self-play games before each training round |
 | `arena_win_threshold` | 0.55 | Candidate win rate needed to replace champion |
-| `curriculum_threshold` | 0.60 | Arena win rate to unlock the next board size |
+| `loss_plateau_threshold` | 0.03 | Relative policy-loss improvement below which the agent is considered to have plateaued on the current board size |
 | `min_iters_per_size` | 5 | Minimum iterations on current size before promotion |
+| `lr_cosine_steps` | 1 000 | Gradient steps for one cosine LR cycle |
+| `lr_min` | 1e-4 | LR floor; schedule resets to `learning_rate` on curriculum advance |
 | `use_pie_rule` | True | Enable swap rule (disable for very early training) |
 | `num_self_play_workers` | cpu\_count/2 | Worker threads sharing the InferenceServer |
 

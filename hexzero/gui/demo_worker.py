@@ -15,12 +15,12 @@ import numpy as np
 import torch
 from PyQt6.QtCore import QThread
 
+import hexzero.checkpoint as ckpt_io
 from config import HexZeroConfig
 from hexzero.features import extract_features
-from hexzero.game import HexState, SWAP_MOVE
+from hexzero.game import SWAP_MOVE, HexState
 from hexzero.mcts import MCTSAgent
 from hexzero.net import build_net
-import hexzero.checkpoint as ckpt_io
 
 _DISPLAY_SIMS   = 25     # MCTS simulations per displayed move
 _MOVE_DELAY_MS  = 650    # pause between moves (ms)

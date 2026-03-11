@@ -21,11 +21,11 @@ Returns:
                        using min=5 max=19
 """
 
-import numpy as np
 from collections import deque
 
-from hexzero.game import HexState, BLACK, WHITE, EMPTY, _NEIGHBOUR_DELTAS
+import numpy as np
 
+from hexzero.game import _NEIGHBOUR_DELTAS, BLACK, EMPTY, WHITE, HexState
 
 _SIZE_MIN = 5
 _SIZE_MAX = 19
@@ -115,10 +115,10 @@ def _bfs_from_seeds(board: np.ndarray, seeds: list, player: int) -> np.ndarray:
         r, c = q.popleft()
         for dr, dc in _NEIGHBOUR_DELTAS:
             nr, nc = r + dr, c + dc
-            if 0 <= nr < size and 0 <= nc < size:
-                if board[nr, nc] != -player and dist[nr, nc] == INF:
-                    dist[nr, nc] = dist[r, c] + 1.0
-                    q.append((nr, nc))
+            if (0 <= nr < size and 0 <= nc < size
+                    and board[nr, nc] != -player and dist[nr, nc] == INF):
+                dist[nr, nc] = dist[r, c] + 1.0
+                q.append((nr, nc))
     return dist
 
 
@@ -148,8 +148,7 @@ def _edge_distance_plane(board: np.ndarray, player: int) -> np.ndarray:
     dist2 = _bfs_from_seeds(board, seeds2, player)
 
     # Normalise; cells unreachable from an edge (blocked by opponent) stay at 1.0
-    plane = np.minimum(np.minimum(dist1, dist2) / size, 1.0)
-    return plane
+    return np.minimum(np.minimum(dist1, dist2) / size, 1.0)
 
 
 def _component_plane(board: np.ndarray, player: int) -> np.ndarray:
@@ -185,9 +184,9 @@ def _component_plane(board: np.ndarray, player: int) -> np.ndarray:
                     cells.append((r, c))
                     for dr, dc in _NEIGHBOUR_DELTAS:
                         nr, nc = r + dr, c + dc
-                        if 0 <= nr < size and 0 <= nc < size:
-                            if board[nr, nc] == player and not visited[nr, nc]:
-                                stack.append((nr, nc))
+                        if (0 <= nr < size and 0 <= nc < size
+                                and board[nr, nc] == player and not visited[nr, nc]):
+                            stack.append((nr, nc))
                 val = len(cells) / total
                 for r, c in cells:
                     plane[r, c] = val

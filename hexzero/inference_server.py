@@ -7,8 +7,8 @@ The call blocks until the batch it belongs to has been evaluated,
 then returns (policy np.ndarray, value float).
 """
 
-import threading
 import queue
+import threading
 import time
 
 import numpy as np

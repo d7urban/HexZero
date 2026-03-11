@@ -41,3 +41,6 @@ class TrainingSignals(QObject):
 
     # Curriculum: emitted when training advances to a larger board size
     board_size_advanced = pyqtSignal(int)
+
+    # Curriculum iteration progress: (iters_on_size, min_iters_per_size)
+    curriculum_progress = pyqtSignal(int, int)

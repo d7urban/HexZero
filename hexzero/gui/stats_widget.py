@@ -6,10 +6,8 @@ StatsWidget: compact horizontal strip showing live training progress.
 └──────────────────────────────────────────────────────────────────────────┘
 """
 
-from PyQt6.QtWidgets import (
-    QWidget, QHBoxLayout, QLabel, QProgressBar, QFrame
-)
 from PyQt6.QtCore import pyqtSlot
+from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel, QProgressBar, QWidget
 
 
 def _sep() -> QFrame:
@@ -41,25 +39,23 @@ class CurriculumWidget(QWidget):
     """
     Displays the board-size curriculum as a compact progression ladder:
 
-        ✓ 7×7  →  ● 9×9  48% / 60%  →  ○ 11×11
+        ✓ 7×7  →  ● 9×9  3/5 iters  →  ○ 11×11
 
-    ✓ = completed (green), ● = current with live progress, ○ = locked (grey).
-    The current-size label shows "current% / goal%" and shifts colour as the
-    model approaches the advancement threshold:
-        grey  → below 50 % of goal
-        amber → 50–89 % of goal
-        lime  → 90–99 % of goal
-        green → at or above goal (advancement is imminent / just happened)
-    At the last (largest) board size there is no goal, so only the win rate
-    is shown without a target.
+    ✓ = completed (green), ● = current with iteration count, ○ = locked (grey).
+    Colour of the current-size label shifts as the iteration count approaches
+    min_iters_per_size:
+        grey  → < 40 % of min_iters
+        amber → 40–79 %
+        lime  → 80–99 %
+        green → at or above min_iters (advancement eligible)
     """
 
-    def __init__(self, sizes: list[int], goal_pct: int, parent=None):
+    def __init__(self, sizes: list[int], min_iters: int, parent=None):
         super().__init__(parent)
-        self._sizes       = sizes
-        self._goal_pct    = goal_pct   # e.g. 60 for 60%
-        self._current_idx = 0
-        self._win_pct     = 0          # last known arena win % for current size
+        self._sizes         = sizes
+        self._min_iters     = min_iters
+        self._current_idx   = 0
+        self._iters_on_size = 0
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -82,13 +78,14 @@ class CurriculumWidget(QWidget):
 
     def advance(self, new_size: int) -> None:
         if new_size in self._sizes:
-            self._current_idx = self._sizes.index(new_size)
-            self._win_pct = 0   # reset progress for the new size
+            self._current_idx   = self._sizes.index(new_size)
+            self._iters_on_size = 0
             self._refresh()
 
-    def update_progress(self, win_rate: float) -> None:
-        """Call after each arena result with the candidate's win rate (0–1)."""
-        self._win_pct = int(round(win_rate * 100))
+    def update_iters(self, iters: int, min_iters: int) -> None:
+        """Update iteration progress for the current board size."""
+        self._iters_on_size = iters
+        self._min_iters     = min_iters
         self._refresh()
 
     def _refresh(self) -> None:
@@ -101,8 +98,7 @@ class CurriculumWidget(QWidget):
                 lbl.setText(f"✓ {size}×{size}")
             elif i == self._current_idx:
                 if is_last:
-                    # No advancement threshold at the final size
-                    suffix = f"  {self._win_pct}%" if self._win_pct > 0 else ""
+                    suffix = f"  {self._iters_on_size} iters" if self._iters_on_size > 0 else ""
                     lbl.setStyleSheet(_STYLE_CURRENT)
                     lbl.setText(f"● {size}×{size}{suffix}")
                 else:
@@ -118,25 +114,23 @@ class CurriculumWidget(QWidget):
             )
 
     def _progress_text(self, size: int) -> str:
-        if self._win_pct > 0:
-            return f"● {size}×{size}  {self._win_pct}% / {self._goal_pct}%"
-        return f"● {size}×{size}  — / {self._goal_pct}%"
+        return f"● {size}×{size}  {self._iters_on_size}/{self._min_iters} iters"
 
     def _progress_style(self) -> str:
-        if self._goal_pct == 0:
+        if self._min_iters == 0:
             return _STYLE_CURRENT
-        ratio = self._win_pct / self._goal_pct
+        ratio = self._iters_on_size / self._min_iters
         if ratio >= 1.0:
             return "color: #6acc6a; font-size: 10px; font-weight: bold;"
-        if ratio >= 0.9:
+        if ratio >= 0.8:
             return "color: #aacc44; font-size: 10px; font-weight: bold;"
-        if ratio >= 0.5:
+        if ratio >= 0.4:
             return "color: #ccaa44; font-size: 10px; font-weight: bold;"
         return _STYLE_CURRENT
 
 
 class StatsWidget(QWidget):
-    def __init__(self, sizes: list[int] | None = None, goal_pct: int = 60, parent=None):
+    def __init__(self, sizes: list[int] | None = None, min_iters: int = 5, parent=None):
         super().__init__(parent)
         self.setFixedHeight(34)
         self.setStyleSheet("background: #252525;")
@@ -190,7 +184,7 @@ class StatsWidget(QWidget):
 
         # Curriculum ladder (right-aligned)
         layout.addWidget(_sep())
-        self._curriculum = CurriculumWidget(sizes or [7, 9, 11], goal_pct)
+        self._curriculum = CurriculumWidget(sizes or [7, 9, 11], min_iters)
         layout.addWidget(self._curriculum)
 
     # ------------------------------------------------------------------
@@ -230,8 +224,11 @@ class StatsWidget(QWidget):
         self._arena_lbl.setText(f"Arena  {cw}/{total} ({pct}%)")
         colour = "#6acc6a" if pct >= 55 else "#cc6a6a"
         self._arena_lbl.setStyleSheet(f"color: {colour};")
-        self._curriculum.update_progress(win_rate)
         self._set_phase("Idle", 0, 1)
+
+    @pyqtSlot(int, int)
+    def on_curriculum_progress(self, iters: int, min_iters: int) -> None:
+        self._curriculum.update_iters(iters, min_iters)
 
     @pyqtSlot(int)
     def on_buffer_updated(self, n: int) -> None:
@@ -248,11 +245,11 @@ class StatsWidget(QWidget):
 
     # ------------------------------------------------------------------
 
-    def restore_state(self, board_size: int, win_rate: float) -> None:
-        """Restore curriculum position and last known win rate (called on startup)."""
+    def restore_state(self, board_size: int, iters_on_size: int) -> None:
+        """Restore curriculum position and iteration count (called on startup)."""
         self._curriculum.advance(board_size)
-        if win_rate > 0:
-            self._curriculum.update_progress(win_rate)
+        if iters_on_size > 0:
+            self._curriculum.update_iters(iters_on_size, self._curriculum._min_iters)
 
     def _set_phase(self, phase: str, done: int, total: int) -> None:
         self._phase_lbl.setText(phase)

@@ -18,7 +18,6 @@ Win detection uses union-find with two virtual nodes per player:
 
 import numpy as np
 
-
 BLACK = 1
 WHITE = -1
 EMPTY = 0
@@ -111,7 +110,8 @@ class HexState:
     def apply_move(self, move: tuple[int, int]) -> None:
         if move == SWAP_MOVE:
             # Pie rule: WHITE takes the BLACK stone, becomes BLACK for the rest.
-            assert self.move_count == 1 and self.last_move is not None
+            assert self.move_count == 1
+            assert self.last_move is not None
             r, c = self.last_move
             self.board[r, c] = WHITE
             self.move_count += 1
@@ -182,10 +182,10 @@ class HexState:
                 r, c = queue.pop()  # DFS order; result is the same as BFS here
                 for dr, dc in _NEIGHBOUR_DELTAS:
                     nr, nc = r + dr, c + dc
-                    if 0 <= nr < size and 0 <= nc < size and (nr, nc) not in visited:
-                        if self.board[nr, nc] == player:
-                            visited.add((nr, nc))
-                            queue.append((nr, nc))
+                    if (0 <= nr < size and 0 <= nc < size
+                            and (nr, nc) not in visited and self.board[nr, nc] == player):
+                        visited.add((nr, nc))
+                        queue.append((nr, nc))
             return visited
 
         return _bfs(sources) & _bfs(dests)
@@ -241,9 +241,9 @@ class HexState:
     def _connect_neighbours(self, r: int, c: int, player: int, cell_id: int) -> None:
         for dr, dc in _NEIGHBOUR_DELTAS:
             nr, nc = r + dr, c + dc
-            if 0 <= nr < self.size and 0 <= nc < self.size:
-                if self.board[nr, nc] == player:
-                    self._uf.union(cell_id, self._cell(nr, nc))
+            if (0 <= nr < self.size and 0 <= nc < self.size
+                    and self.board[nr, nc] == player):
+                self._uf.union(cell_id, self._cell(nr, nc))
 
     def _reconnect_cell(self, r: int, c: int) -> None:
         """Re-apply union-find connections for a cell (used after board copy)."""

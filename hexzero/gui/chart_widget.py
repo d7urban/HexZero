@@ -10,9 +10,8 @@ from collections import deque
 
 import numpy as np
 import pyqtgraph as pg
-from PyQt6.QtWidgets import QWidget, QHBoxLayout
 from PyQt6.QtCore import pyqtSlot
-
+from PyQt6.QtWidgets import QHBoxLayout, QWidget
 
 _WINDOW = 2000   # number of recent steps shown
 

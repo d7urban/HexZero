@@ -19,27 +19,51 @@ The TrainingWorker thread runs self-play → train → arena in the background.
 
 import os
 import threading
+
 import torch
-
-from PyQt6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QSplitter,
-    QToolBar, QStatusBar, QLabel, QFileDialog,
-    QComboBox, QSpinBox, QMessageBox,
-)
-from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSlot, QObject, pyqtSignal
+from PyQt6.QtCore import QObject, Qt, QThread, QTimer, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QAction
+from PyQt6.QtWidgets import (
+    QComboBox,
+    QFileDialog,
+    QLabel,
+    QMainWindow,
+    QMessageBox,
+    QSpinBox,
+    QSplitter,
+    QStatusBar,
+    QToolBar,
+    QVBoxLayout,
+    QWidget,
+)
 
+import hexzero.checkpoint as ckpt_io
 from config import HexZeroConfig
 from hexzero.game import HexState
-from hexzero.net import build_net
-from hexzero.trainer import Trainer
-from hexzero.gui.signals import TrainingSignals
 from hexzero.gui.board_widget import BoardWidget
 from hexzero.gui.chart_widget import ChartWidget
-from hexzero.gui.mcts_widget import MCTSWidget
-from hexzero.gui.stats_widget import StatsWidget
 from hexzero.gui.demo_worker import DemoWorker
-import hexzero.checkpoint as ckpt_io
+from hexzero.gui.mcts_widget import MCTSWidget
+from hexzero.gui.signals import TrainingSignals
+from hexzero.gui.stats_widget import StatsWidget
+from hexzero.net import build_net
+from hexzero.trainer import Trainer
+
+
+def _loss_plateau(losses: list[float], window: int, threshold: float) -> bool:
+    """Return True when policy loss has stopped improving significantly.
+
+    Compares the first and last value of the most recent `window` per-iteration
+    losses.  If the relative improvement is below `threshold` the network has
+    plateaued on the current board size.
+    """
+    if len(losses) < window:
+        return False
+    recent = losses[-window:]
+    start  = recent[0]
+    if start <= 0:
+        return True
+    return (start - recent[-1]) / start < threshold
 
 
 # ---------------------------------------------------------------------------
@@ -62,8 +86,8 @@ class TrainingWorker(QObject):
 
     @pyqtSlot()
     def run(self) -> None:
+        from hexzero.arena import candidate_is_better, run_arena
         from hexzero.self_play import run_self_play_parallel
-        from hexzero.arena import run_arena, candidate_is_better
 
         cfg        = self.cfg
         board_size = cfg.initial_board_size
@@ -97,6 +121,7 @@ class TrainingWorker(QObject):
             board_size = ts["board_size"]
             size_idx   = cfg.board_sizes.index(board_size)
         iters_on_size = ts.get("iters_on_size", 0)
+        size_losses: list[float] = ts.get("size_losses", [])
 
         stop = self._stop_event
         while not stop.is_set():
@@ -140,7 +165,10 @@ class TrainingWorker(QObject):
             self.signals.status_message.emit(
                 f"Iteration {self._iteration} — training…"
             )
-            self.trainer.train_iteration(self._iteration, board_size)
+            metrics_list = self.trainer.train_iteration(self._iteration, board_size)
+            if metrics_list:
+                mean_loss = sum(m["policy_loss"] for m in metrics_list) / len(metrics_list)
+                size_losses.append(mean_loss)
 
             if stop.is_set():
                 break
@@ -172,41 +200,45 @@ class TrainingWorker(QObject):
             win_rate = cw / total if total > 0 else 0.0
 
             iters_on_size += 1
+            self.signals.curriculum_progress.emit(iters_on_size, cfg.min_iters_per_size)
             ckpt_io.save_training_state(cfg.checkpoint_dir, {
-                "iteration": self._iteration,
-                "board_size": board_size,
-                "size_idx": size_idx,
-                "win_rate": win_rate,
+                "iteration":    self._iteration,
+                "board_size":   board_size,
+                "size_idx":     size_idx,
                 "iters_on_size": iters_on_size,
+                "size_losses":  size_losses,
             })
 
             if candidate_is_better(cw, chw, total, cfg.arena_win_threshold):
                 best_path = cand_path
                 self.signals.checkpoint_saved.emit(best_path)
 
-                # Curriculum: advance board size when win rate clears the threshold
-                # AND the agent has trained for the minimum number of iterations
-                # on the current size (prevents advancing on the first easy win).
                 next_idx = size_idx + 1
                 can_advance = (
-                    win_rate >= cfg.curriculum_threshold
-                    and iters_on_size >= cfg.min_iters_per_size
+                    iters_on_size >= cfg.min_iters_per_size
+                    and _loss_plateau(size_losses, cfg.min_iters_per_size,
+                                      cfg.loss_plateau_threshold)
                     and next_idx < len(cfg.board_sizes)
                 )
                 if can_advance:
                     size_idx      = next_idx
                     board_size    = cfg.board_sizes[size_idx]
                     iters_on_size = 0
+                    size_losses   = []
+                    self.trainer.reset_lr()
                     self.signals.board_size_advanced.emit(board_size)
                     self.signals.status_message.emit(
                         f"Iteration {self._iteration} — curriculum advanced to "
-                        f"{board_size}×{board_size}! ({cw}/{total}, {win_rate:.0%})"
+                        f"{board_size}×{board_size}! ({cw}/{total})"
                     )
                 else:
-                    remaining = max(0, cfg.min_iters_per_size - iters_on_size)
-                    suffix = (f"  (need {remaining} more iter(s) to advance)"
-                              if remaining > 0 and win_rate >= cfg.curriculum_threshold
-                              else "")
+                    iters_left = max(0, cfg.min_iters_per_size - iters_on_size)
+                    if iters_left > 0:
+                        suffix = f"  (need {iters_left} more iter(s) on {board_size}×{board_size})"
+                    elif next_idx >= len(cfg.board_sizes):
+                        suffix = "  (at largest board size)"
+                    else:
+                        suffix = "  (loss still converging)"
                     self.signals.status_message.emit(
                         f"Iteration {self._iteration} — new champion! "
                         f"({cw}/{total}, {win_rate:.0%}){suffix}"
@@ -259,10 +291,10 @@ class MainWindow(QMainWindow):
         if ts:
             self._stats.restore_state(
                 ts.get("board_size", self.cfg.initial_board_size),
-                ts.get("win_rate", 0.0),
+                ts.get("iters_on_size", 0),
             )
         elif self.cfg.initial_board_size != self.cfg.board_sizes[0]:
-            self._stats.restore_state(self.cfg.initial_board_size, 0.0)
+            self._stats.restore_state(self.cfg.initial_board_size, 0)
 
         if self._startup_msg:
             self._status_label.setText(self._startup_msg)
@@ -283,7 +315,8 @@ class MainWindow(QMainWindow):
             if board_size and board_size in self.cfg.board_sizes:
                 self.cfg.initial_board_size = board_size
             iteration = data.get("iteration", 0)
-            return f"Loaded checkpoint: iter {iteration}, board {self.cfg.initial_board_size}×{self.cfg.initial_board_size}"
+            sz = self.cfg.initial_board_size
+            return f"Loaded checkpoint: iter {iteration}, board {sz}×{sz}"
         except Exception as e:
             return f"Could not load checkpoint: {e}"
 
@@ -313,7 +346,7 @@ class MainWindow(QMainWindow):
         splitter.setSizes([540, 660])
 
         # ------ stats bar below the splitter ------
-        self._stats = StatsWidget(sizes=self.cfg.board_sizes, goal_pct=int(self.cfg.curriculum_threshold * 100))
+        self._stats = StatsWidget(sizes=self.cfg.board_sizes, min_iters=self.cfg.min_iters_per_size)
 
         # ------ central widget: splitter + stats ------
         central = QWidget()
@@ -404,6 +437,7 @@ class MainWindow(QMainWindow):
         sig.metrics_updated.connect(self._stats.on_metrics)
         sig.board_size_advanced.connect(self._on_size_advanced)
         sig.board_size_advanced.connect(self._stats.on_board_size_advanced)
+        sig.curriculum_progress.connect(self._stats.on_curriculum_progress)
 
     # ------------------------------------------------------------------
     # Slots

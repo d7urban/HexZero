@@ -38,8 +38,13 @@ class HexZeroConfig:
     # Training
     batch_size: int = 256
     learning_rate: float = 1e-3
-    lr_decay_steps: int = 100_000
-    lr_decay_gamma: float = 0.1
+    # Cosine LR schedule: decays from learning_rate to lr_min over lr_cosine_steps
+    # gradient steps, then holds at lr_min until the next curriculum advance, at
+    # which point it resets to learning_rate so the network can adapt quickly to
+    # the new board size.  Default = min_iters_per_size * train_steps_per_iteration
+    # so the LR reaches its floor right around when promotion first becomes possible.
+    lr_cosine_steps: int = 1_000   # = 5 iters × 200 steps
+    lr_min: float = 1e-4
     weight_decay: float = 1e-4
     value_loss_weight: float = 1.0
     train_steps_per_iteration: int = 200
@@ -55,10 +60,13 @@ class HexZeroConfig:
     checkpoint_dir: str = "checkpoints"
     keep_last_n_checkpoints: int = 5
 
-    # Curriculum: when arena win rate on current size exceeds this, unlock next size.
-    # min_iters_per_size prevents advancing on the very first arena win; the agent
-    # must spend at least this many iterations on each size before promotion.
-    curriculum_threshold: float = 0.60
+    # Curriculum: advance to the next board size when BOTH conditions hold:
+    #   1. At least min_iters_per_size iterations completed on the current size.
+    #   2. Policy loss has plateaued: relative improvement over the last
+    #      min_iters_per_size iterations is below loss_plateau_threshold.
+    # This avoids the binary 0%/100% arena win-rate which is not a meaningful
+    # mastery signal when MCTS simulations are low.
+    loss_plateau_threshold: float = 0.03   # < 3% relative improvement = plateau
     min_iters_per_size: int = 5
 
     # Pie rule (swap rule): after BLACK's first move WHITE may swap colours.

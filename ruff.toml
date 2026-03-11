@@ -1,0 +1,60 @@
+line-length = 100
+
+[lint.per-file-ignores]
+"hexzero/gui/board_widget.py" = ["E501"]   # color interpolation math is wider than 100 chars
+"hexzero/gui/stats_widget.py" = ["E501"]   # ASCII art in module docstring
+
+[lint]
+select = ["ALL"]
+ignore = [
+    # ── Documentation / annotations ────────────────────────────────────────
+    "D",        # pydocstyle
+    "ANN",      # flake8-annotations
+    # ── Noise / style choices ──────────────────────────────────────────────
+    "T20",      # print statements are fine
+    "FBT",      # boolean-trap — overly strict for this codebase
+    "ERA",      # commented-out code
+    "COM812",   # trailing comma
+    "ISC001",   # implicit string concatenation on one line
+    "UP007",    # X | Y union syntax requires Python 3.10+
+    "TC",       # TYPE_CHECKING imports
+    # ── Unicode intentional ────────────────────────────────────────────────
+    "RUF001",   # × in strings — used for board-size labels ("7×7")
+    "RUF002",   # × in docstrings
+    "RUF003",   # × in comments
+    # ── Qt naming conventions (required by Qt API) ─────────────────────────
+    "N802",     # closeEvent, paintEvent, mousePressEvent, etc.
+    # ── Mathematical / AlphaZero naming conventions ────────────────────────
+    "N803",     # parent_N — uppercase is conventional for visit counts
+    "N806",     # Q, W, N, INF, B, C, H — standard ML / math notation
+    "N812",     # F = torch.nn.functional — standard PyTorch convention
+    # ── Intentional lazy imports ───────────────────────────────────────────
+    "PLC0415",  # run_headless defers torch/PyQt; TrainingWorker defers arena
+    # ── Intentional private-member access ──────────────────────────────────
+    "SLF001",   # intra-package access to _uf, _winner, etc.
+    # ── Intentional broad exception handling ──────────────────────────────
+    "BLE001",   # checkpoint reads / buffer saves are best-effort
+    "S110",     # try-except-pass is intentional for non-fatal I/O
+    "SIM105",   # contextlib.suppress — explicit try/except is clearer here
+    # ── Complexity limits — TrainingWorker.run is inherently long ──────────
+    "PLR0913",  # too many arguments
+    "PLR0912",  # too many branches
+    "PLR0915",  # too many statements
+    "C901",     # too complex
+    # ── Magic values are fine for game/ML constants ────────────────────────
+    "PLR2004",
+    # ── pathlib preference — os.path is fine here ─────────────────────────
+    "PTH",
+    # ── numpy legacy RNG — no cryptographic use ───────────────────────────
+    "NPY002",
+    # ── Misc ───────────────────────────────────────────────────────────────
+    "A002",     # compile= shadows builtin — clear from context
+    "S311",     # random not suitable for crypto — we know
+    "TRY003",   # long exception messages
+    "EM101",    # exception message in string literal
+    "EM102",    # exception message in f-string
+    "S101",     # assert — used for game-state invariants
+    "TRY300",   # move to else block — minor style
+    "ARG002",   # unused method argument — Qt event handlers require fixed signatures
+    "RUF013",   # implicit Optional — Python 3.10+ syntax not required
+]

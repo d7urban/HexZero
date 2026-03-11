@@ -11,13 +11,16 @@ why (visits, Q-value, prior).
 """
 
 
-from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QTableWidget, QTableWidgetItem,
-    QHeaderView, QLabel
-)
 from PyQt6.QtCore import Qt, pyqtSlot
-from PyQt6.QtGui import QColor, QBrush
-
+from PyQt6.QtGui import QBrush, QColor
+from PyQt6.QtWidgets import (
+    QHeaderView,
+    QLabel,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
 
 _COLS = ["Move", "Visits (N)", "Value (Q)", "Prior (P)"]
 
@@ -67,9 +70,10 @@ class MCTSWidget(QWidget):
         max_N = max((m["N"] for m in top_moves), default=1) or 1
 
         for row, move_info in enumerate(top_moves):
+            m = move_info["move"]
             move_str = move_info.get("move_str") or (
-                lambda m: "swap" if m == (-1, -1) else f"{chr(ord('A') + m[0])}{m[1] + 1}"
-            )(move_info["move"])
+                "swap" if m == (-1, -1) else f"{chr(ord('A') + m[0])}{m[1] + 1}"
+            )
             n_val = move_info["N"]
             q_val = move_info["Q"]
             p_val = move_info["P"]

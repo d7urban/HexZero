@@ -15,13 +15,13 @@ Supports:
 """
 
 import math
+
 import numpy as np
+from PyQt6.QtCore import QPointF, QRectF, Qt, pyqtSignal
+from PyQt6.QtGui import QBrush, QColor, QFont, QPainter, QPen, QPolygonF
+from PyQt6.QtWidgets import QSizePolicy, QWidget
 
-from PyQt6.QtWidgets import QWidget, QSizePolicy
-from PyQt6.QtCore import Qt, QPointF, pyqtSignal, QRectF
-from PyQt6.QtGui import QPainter, QColor, QPolygonF, QPen, QBrush, QFont
-
-from hexzero.game import HexState, BLACK, WHITE, EMPTY
+from hexzero.game import BLACK, EMPTY, WHITE, HexState
 
 # Colours
 _COL_BLACK      = QColor(30,  90,  200)   # blue player
@@ -254,21 +254,20 @@ class BoardWidget(QWidget):
             fill = _COL_BLACK
         elif cell_val == WHITE:
             fill = _COL_WHITE
+        # Empty cell: maybe tint by policy heatmap
+        elif self._policy is not None:
+            idx = row * state.size + col
+            intensity = float(self._policy[idx]) / (policy_max + 1e-8)
+            r = int(_COL_POLICY_COLD.red()   + intensity * (_COL_POLICY_HOT.red()   - _COL_POLICY_COLD.red()))
+            g = int(_COL_POLICY_COLD.green() + intensity * (_COL_POLICY_HOT.green() - _COL_POLICY_COLD.green()))
+            b = int(_COL_POLICY_COLD.blue()  + intensity * (_COL_POLICY_HOT.blue()  - _COL_POLICY_COLD.blue()))
+            a = int(_COL_POLICY_COLD.alpha() + intensity * (_COL_POLICY_HOT.alpha() - _COL_POLICY_COLD.alpha()))
+            policy_colour = QColor(r, g, b, a)
+            # Blend with base empty colour
+            base = _COL_EMPTY_HVR if self._hover == (row, col) else _COL_EMPTY
+            fill = _blend_colours(base, policy_colour, intensity * 0.8)
         else:
-            # Empty cell: maybe tint by policy heatmap
-            if self._policy is not None:
-                idx = row * state.size + col
-                intensity = float(self._policy[idx]) / (policy_max + 1e-8)
-                r = int(_COL_POLICY_COLD.red()   + intensity * (_COL_POLICY_HOT.red()   - _COL_POLICY_COLD.red()))
-                g = int(_COL_POLICY_COLD.green() + intensity * (_COL_POLICY_HOT.green() - _COL_POLICY_COLD.green()))
-                b = int(_COL_POLICY_COLD.blue()  + intensity * (_COL_POLICY_HOT.blue()  - _COL_POLICY_COLD.blue()))
-                a = int(_COL_POLICY_COLD.alpha() + intensity * (_COL_POLICY_HOT.alpha() - _COL_POLICY_COLD.alpha()))
-                policy_colour = QColor(r, g, b, a)
-                # Blend with base empty colour
-                base = _COL_EMPTY_HVR if self._hover == (row, col) else _COL_EMPTY
-                fill = _blend_colours(base, policy_colour, intensity * 0.8)
-            else:
-                fill = _COL_EMPTY_HVR if self._hover == (row, col) else _COL_EMPTY
+            fill = _COL_EMPTY_HVR if self._hover == (row, col) else _COL_EMPTY
 
         painter.setBrush(QBrush(fill))
 
@@ -304,7 +303,7 @@ class BoardWidget(QWidget):
             painter.drawText(
                 QRectF(c.x() - dx / 2 - lw - 2, c.y() - lh / 2, lw, lh),
                 Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-                chr(ord('A') + i),
+                chr(ord("A") + i),
             )
             # Col labels (1, 2, 3, ...) — above each row-0 cell's top point
             c2 = self._cell_center(0, i, radius)

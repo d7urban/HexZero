@@ -9,8 +9,8 @@ Usage:
 """
 
 import argparse
-import sys
 import os
+import sys
 
 from config import HexZeroConfig
 
@@ -25,13 +25,25 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
+def _loss_plateau(losses: list[float], window: int, threshold: float) -> bool:
+    """Return True when loss improvement over `window` iters drops below `threshold`."""
+    if len(losses) < window:
+        return False
+    recent = losses[-window:]
+    start  = recent[0]
+    if start <= 0:
+        return True
+    return (start - recent[-1]) / start < threshold
+
+
 def run_headless(cfg: HexZeroConfig, resume_path: str = None) -> None:
     import torch
-    from hexzero.net import build_net
-    from hexzero.trainer import Trainer
-    from hexzero.self_play import run_self_play_parallel
-    from hexzero.arena import run_arena, candidate_is_better
+
     import hexzero.checkpoint as ckpt_io
+    from hexzero.arena import candidate_is_better, run_arena
+    from hexzero.net import build_net
+    from hexzero.self_play import run_self_play_parallel
+    from hexzero.trainer import Trainer
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
@@ -54,6 +66,7 @@ def run_headless(cfg: HexZeroConfig, resume_path: str = None) -> None:
     iteration     = ckpt_io.latest_iteration(cfg.checkpoint_dir)
     ts            = ckpt_io.load_training_state(cfg.checkpoint_dir)
     iters_on_size = ts.get("iters_on_size", 0)
+    size_losses: list[float] = ts.get("size_losses", [])
 
     if os.path.exists(buf_path):
         print(f"Loading replay buffer from {buf_path}…", end="", flush=True)
@@ -67,17 +80,24 @@ def run_headless(cfg: HexZeroConfig, resume_path: str = None) -> None:
             print(f"Iteration {iteration}  |  board {board_size}×{board_size}")
 
             print("  Self-play…", end="", flush=True)
-            samples = run_self_play_parallel(cfg, best_path, device, board_size, cfg.games_per_iteration)
+            samples = run_self_play_parallel(
+                cfg, best_path, device, board_size, cfg.games_per_iteration)
             for s in samples:
                 trainer.replay_buffer.add(s)
-            print(f" {len(samples)} samples ({cfg.games_per_iteration} games × 2 with augmentation)")
+            n_aug = cfg.games_per_iteration
+            print(f" {len(samples)} samples ({n_aug} games × 2 with augmentation)")
             trainer.replay_buffer.save(buf_path)
 
             print("  Training…", end="", flush=True)
             metrics_list = trainer.train_iteration(iteration, board_size)
             if metrics_list:
                 last = metrics_list[-1]
-                print(f" loss={last['loss']:.4f}  policy_acc={last['policy_acc']:.3f}")
+                mean_loss = sum(m["policy_loss"] for m in metrics_list) / len(metrics_list)
+                size_losses.append(mean_loss)
+                plateau = _loss_plateau(
+                    size_losses, cfg.min_iters_per_size, cfg.loss_plateau_threshold)
+                print(f" loss={last['loss']:.4f}  policy_acc={last['policy_acc']:.3f}"
+                      f"  plateau={plateau}")
 
             cand_path = trainer.save_checkpoint(iteration, board_size)
 
@@ -92,20 +112,24 @@ def run_headless(cfg: HexZeroConfig, resume_path: str = None) -> None:
                 print("  → New champion accepted.")
                 size_idx  = cfg.board_sizes.index(board_size)
                 next_idx  = size_idx + 1
-                if (win_rate := cw / total) >= cfg.curriculum_threshold \
-                        and iters_on_size >= cfg.min_iters_per_size \
-                        and next_idx < len(cfg.board_sizes):
+                if (_loss_plateau(size_losses, cfg.min_iters_per_size,
+                                  cfg.loss_plateau_threshold)
+                        and iters_on_size >= cfg.min_iters_per_size
+                        and next_idx < len(cfg.board_sizes)):
                     board_size    = cfg.board_sizes[next_idx]
                     iters_on_size = 0
+                    size_losses   = []
+                    trainer.reset_lr()
                     print(f"  → Curriculum advanced to {board_size}×{board_size}!")
             else:
                 print("  → Champion retained.")
 
             ckpt_io.save_training_state(cfg.checkpoint_dir, {
-                "iteration": iteration,
-                "board_size": board_size,
-                "size_idx": cfg.board_sizes.index(board_size),
+                "iteration":    iteration,
+                "board_size":   board_size,
+                "size_idx":     cfg.board_sizes.index(board_size),
                 "iters_on_size": iters_on_size,
+                "size_losses":  size_losses,
             })
 
     except KeyboardInterrupt:
@@ -114,13 +138,14 @@ def run_headless(cfg: HexZeroConfig, resume_path: str = None) -> None:
 
 def run_gui(cfg: HexZeroConfig, resume_path: str = None) -> None:
     from PyQt6.QtWidgets import QApplication
+
     from hexzero.gui.main_window import MainWindow
 
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
 
     # Dark palette
-    from PyQt6.QtGui import QPalette, QColor
+    from PyQt6.QtGui import QColor, QPalette
     palette = QPalette()
     palette.setColor(QPalette.ColorRole.Window,          QColor(45,  45,  45))
     palette.setColor(QPalette.ColorRole.WindowText,      QColor(210, 210, 210))

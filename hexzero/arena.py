@@ -5,15 +5,15 @@ candidate model should replace the current champion.
 Games alternate colours to neutralise the first-move advantage.
 """
 
-import torch
 import numpy as np
+import torch
 
-from config import HexZeroConfig
-from hexzero.game import HexState, BLACK, WHITE, SWAP_MOVE
-from hexzero.features import extract_features
-from hexzero.net import HexNet, build_net
-from hexzero.mcts import MCTSAgent
 import hexzero.checkpoint as ckpt_io
+from config import HexZeroConfig
+from hexzero.features import extract_features
+from hexzero.game import BLACK, SWAP_MOVE, WHITE, HexState
+from hexzero.mcts import MCTSAgent
+from hexzero.net import HexNet, build_net
 
 
 def _make_infer_fn(net: HexNet, device: torch.device):
@@ -39,7 +39,8 @@ def _play_game(
     Play a game to completion.  black_agent plays BLACK, white_agent plays WHITE.
     Returns the winner (BLACK or WHITE constant).
     """
-    from hexzero.game import BLACK as BLK, WHITE as WHT
+    from hexzero.game import BLACK as BLK
+    from hexzero.game import WHITE as WHT
     agents = {BLK: black_agent, WHT: white_agent}
 
     while not state.is_terminal():
@@ -123,7 +124,7 @@ def run_arena(
 
 def candidate_is_better(
     cand_wins: int,
-    champ_wins: int,
+    _champ_wins: int,
     total: int,
     threshold: float,
 ) -> bool:

@@ -13,14 +13,21 @@ import sys
 
 import numpy as np
 import torch
-
-from PyQt6.QtCore import Qt, QThread, QObject, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import QObject, Qt, QThread, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QAction, QColor, QPalette
 from PyQt6.QtWidgets import (
-    QApplication, QComboBox, QLabel, QMainWindow, QPushButton,
-    QSpinBox, QSplitter, QStatusBar, QToolBar,
+    QApplication,
+    QComboBox,
+    QLabel,
+    QMainWindow,
+    QPushButton,
+    QSpinBox,
+    QSplitter,
+    QStatusBar,
+    QToolBar,
 )
 
+import hexzero.checkpoint as ckpt_io
 from config import HexZeroConfig
 from hexzero.features import extract_features
 from hexzero.game import BLACK, SWAP_MOVE, WHITE, HexState
@@ -28,8 +35,6 @@ from hexzero.gui.board_widget import BoardWidget
 from hexzero.gui.mcts_widget import MCTSWidget
 from hexzero.mcts import MCTSAgent
 from hexzero.net import build_net
-import hexzero.checkpoint as ckpt_io
-
 
 # ---------------------------------------------------------------------------
 # Background AI worker

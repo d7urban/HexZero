@@ -9,10 +9,11 @@ Each sample is a dict:
 """
 
 import gzip
-import threading
 import random
-import torch
+import threading
+
 import numpy as np
+import torch
 
 
 class ReplayBuffer:
@@ -61,7 +62,8 @@ class ReplayBuffer:
         features    = torch.tensor(np.stack([s["features"]   for s in chosen]), dtype=torch.float32)
         policy      = torch.tensor(np.stack([s["policy"]     for s in chosen]), dtype=torch.float32)
         value       = torch.tensor([s["value"]                for s in chosen], dtype=torch.float32)
-        size_scalar = torch.tensor([[s["size_norm"]]           for s in chosen], dtype=torch.float32)
+        size_scalar = torch.tensor(
+            [[s["size_norm"]] for s in chosen], dtype=torch.float32)
 
         return {
             "features":    features,      # (B, C, H, W)
@@ -73,7 +75,7 @@ class ReplayBuffer:
     def sizes_available(self) -> list[int]:
         """Return sorted list of board sizes present in the buffer."""
         with self._lock:
-            return sorted(set(s["board_size"] for s in self._buffer))
+            return sorted({s["board_size"] for s in self._buffer})
 
     def save(self, path: str) -> None:
         with self._lock:
