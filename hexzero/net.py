@@ -5,7 +5,7 @@ Architecture:
   Input: (B, C, H, W)  — C feature planes (default 8)
   Stem:  conv 3×3, 128 filters, BN, ReLU
   Tower: 8 × ResBlock(128 filters, 3×3)
-  Policy head: conv 1×1 → (B, H*W) log-probabilities
+  Policy head: conv 1×1 → concat swap logit → (B, H*W+1) log-probabilities
   Value head:  global avg pool → concat(pool, size_scalar) → FC(256) → ReLU → FC(1) → tanh
 
 Board-size conditioning: the value head receives the board size as a

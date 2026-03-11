@@ -32,6 +32,7 @@ def save(
     metrics: dict,
     checkpoint_dir: str,
     keep_last_n: int = 5,
+    scheduler: torch.optim.lr_scheduler.LRScheduler | None = None,
 ) -> str:
     """
     Write checkpoint to `checkpoint_dir/iter_{iteration:06d}.pt`.
@@ -51,12 +52,10 @@ def save(
         "optimizer_state": optimizer.state_dict(),
         "metrics": metrics,
     }
+    if scheduler is not None:
+        payload["scheduler_state"] = scheduler.state_dict()
     torch.save(payload, tmp_path)
     os.replace(tmp_path, final_path)  # atomic on POSIX
-
-    # Update best.pt (copy — symlinks can be tricky across filesystems)
-    best_path = ckpt_dir / "best.pt"
-    shutil.copy2(final_path, best_path)
 
     # Prune old checkpoints
     checkpoints = sorted(ckpt_dir.glob("iter_*.pt"), key=lambda p: p.name)
@@ -64,6 +63,15 @@ def save(
         checkpoints.pop(0).unlink(missing_ok=True)
 
     return str(final_path)
+
+
+def promote_to_best(path: str, checkpoint_dir: str) -> None:
+    """Copy `path` to `checkpoint_dir/best.pt`.
+
+    Must be called explicitly by the caller after confirming the checkpoint
+    is a new champion.  checkpoint.save() intentionally does NOT do this.
+    """
+    shutil.copy2(path, Path(checkpoint_dir) / "best.pt")
 
 
 def load(path: str, device: torch.device | None = None) -> dict:

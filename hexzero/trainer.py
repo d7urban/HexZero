@@ -56,6 +56,8 @@ class Trainer:
         data = ckpt_io.load(path, self.device)
         ckpt_io.load_weights(self.net, data["model_state"])
         self.optimizer.load_state_dict(data["optimizer_state"])
+        if "scheduler_state" in data:
+            self.scheduler.load_state_dict(data["scheduler_state"])
         self.global_step = data.get("metrics", {}).get("global_step", 0)
 
     def save_checkpoint(self, iteration: int, board_size: int | None = None) -> str:
@@ -65,6 +67,7 @@ class Trainer:
         return ckpt_io.save(
             self.net, self.optimizer, iteration, metrics,
             self.cfg.checkpoint_dir, self.cfg.keep_last_n_checkpoints,
+            scheduler=self.scheduler,
         )
 
     def reset_lr(self) -> None:

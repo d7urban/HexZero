@@ -99,6 +99,7 @@ class TrainingWorker(QObject):
         if best_path is None:
             self.signals.status_message.emit("Saving initial checkpoint…")
             best_path = self.trainer.save_checkpoint(0, board_size)
+            ckpt_io.promote_to_best(best_path, cfg.checkpoint_dir)
             self.signals.checkpoint_saved.emit(best_path)
 
         # Resume iteration counter from disk so we never overwrite / prune a
@@ -140,12 +141,13 @@ class TrainingWorker(QObject):
                 self.signals.self_play_progress.emit(done, total)
                 self.signals.buffer_updated.emit(len(self.trainer.replay_buffer))
 
-            device  = self.trainer.device
-            samples = run_self_play_parallel(
+            device = self.trainer.device
+            samples, swap_games, games_played = run_self_play_parallel(
                 cfg, best_path, device, board_size, cfg.games_per_iteration,
                 progress_callback=_sp_progress,
                 stop_event=stop,
             )
+            self.signals.swap_rate_updated.emit(swap_games, games_played)
             for s in samples:
                 self.trainer.replay_buffer.add(s)
             self.signals.buffer_updated.emit(len(self.trainer.replay_buffer))
@@ -211,6 +213,7 @@ class TrainingWorker(QObject):
 
             if candidate_is_better(cw, chw, total, cfg.arena_win_threshold):
                 best_path = cand_path
+                ckpt_io.promote_to_best(best_path, cfg.checkpoint_dir)
                 self.signals.checkpoint_saved.emit(best_path)
 
                 next_idx = size_idx + 1
@@ -346,7 +349,11 @@ class MainWindow(QMainWindow):
         splitter.setSizes([540, 660])
 
         # ------ stats bar below the splitter ------
-        self._stats = StatsWidget(sizes=self.cfg.board_sizes, min_iters=self.cfg.min_iters_per_size)
+        self._stats = StatsWidget(
+            sizes=self.cfg.board_sizes,
+            min_iters=self.cfg.min_iters_per_size,
+            use_pie_rule=self.cfg.use_pie_rule,
+        )
 
         # ------ central widget: splitter + stats ------
         central = QWidget()
@@ -438,6 +445,7 @@ class MainWindow(QMainWindow):
         sig.board_size_advanced.connect(self._on_size_advanced)
         sig.board_size_advanced.connect(self._stats.on_board_size_advanced)
         sig.curriculum_progress.connect(self._stats.on_curriculum_progress)
+        sig.swap_rate_updated.connect(self._stats.on_swap_rate_updated)
 
     # ------------------------------------------------------------------
     # Slots

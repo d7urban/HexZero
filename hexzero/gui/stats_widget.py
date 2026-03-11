@@ -130,7 +130,13 @@ class CurriculumWidget(QWidget):
 
 
 class StatsWidget(QWidget):
-    def __init__(self, sizes: list[int] | None = None, min_iters: int = 5, parent=None):
+    def __init__(
+        self,
+        sizes: list[int] | None = None,
+        min_iters: int = 5,
+        use_pie_rule: bool = True,
+        parent=None,
+    ):
         super().__init__(parent)
         self.setFixedHeight(34)
         self.setStyleSheet("background: #252525;")
@@ -179,6 +185,14 @@ class StatsWidget(QWidget):
         # Arena result
         self._arena_lbl = _label("Arena  —")
         layout.addWidget(self._arena_lbl)
+
+        # Pie swap rate (only when pie rule is active)
+        if use_pie_rule:
+            layout.addWidget(_sep())
+            self._swap_lbl = _label("Swap  —")
+            layout.addWidget(self._swap_lbl)
+        else:
+            self._swap_lbl = None
 
         layout.addStretch()
 
@@ -229,6 +243,16 @@ class StatsWidget(QWidget):
     @pyqtSlot(int, int)
     def on_curriculum_progress(self, iters: int, min_iters: int) -> None:
         self._curriculum.update_iters(iters, min_iters)
+
+    @pyqtSlot(int, int)
+    def on_swap_rate_updated(self, swaps: int, total: int) -> None:
+        if self._swap_lbl is None:
+            return
+        if total == 0:
+            self._swap_lbl.setText("Swap  —")
+            return
+        pct = int(100 * swaps / total)
+        self._swap_lbl.setText(f"Swap  {swaps}/{total} ({pct}%)")
 
     @pyqtSlot(int)
     def on_buffer_updated(self, n: int) -> None:

@@ -2,9 +2,10 @@
 Replay buffer storing self-play game records.
 
 Each sample is a dict:
-    features    : np.ndarray (C, H, W) float32
-    policy      : np.ndarray (H*W,)    float32  — MCTS visit distribution
-    value       : float                         — game outcome from this player's POV
+    features    : np.ndarray (C, H, W)   float32
+    policy      : np.ndarray (H*W+1,)    float32  — MCTS visit distribution;
+                  final element is the pie-rule swap move probability
+    value       : float                           — game outcome from this player's POV
     board_size  : int
 """
 

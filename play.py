@@ -69,7 +69,7 @@ class PlayWindow(QMainWindow):
         self._human_color  = human_color
         self._sims         = sims
         self._device       = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self._net          = build_net(cfg, self._device)
+        self._net          = build_net(cfg, self._device, compile=False)
         self._state:     HexState | None  = None
         self._agent:     MCTSAgent | None = None
         self._ai_thread: QThread | None   = None

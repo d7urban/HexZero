@@ -44,3 +44,6 @@ class TrainingSignals(QObject):
 
     # Curriculum iteration progress: (iters_on_size, min_iters_per_size)
     curriculum_progress = pyqtSignal(int, int)
+
+    # Pie rule swap rate after self-play: (swap_games, total_games)
+    swap_rate_updated = pyqtSignal(int, int)

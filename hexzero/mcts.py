@@ -5,8 +5,9 @@ Deliberately decoupled from HexNet: takes an `infer_fn` callable so it
 can be used with any backend (trained net, random prior, batched GPU server).
 
 infer_fn signature:
-    infer_fn(state: HexState) -> (policy: np.ndarray shape (H*W,), value: float)
-    policy is a probability distribution over all cells in row-major order.
+    infer_fn(state: HexState) -> (policy: np.ndarray shape (H*W+1,), value: float)
+    policy is a probability distribution over all cells in row-major order,
+    with the final element being the probability of the pie-rule swap move.
     value is from the current player's perspective in [-1, 1].
 """
 
@@ -81,7 +82,10 @@ class MCTSAgent:
         size = state.size
         n_cells = size * size
 
-        if self._root is None or self._root.state.move_count != state.move_count:
+        root = self._root
+        if (root is None
+                or root.state.current_player != state.current_player
+                or not np.array_equal(root.state.board, state.board)):
             self._root = Node(state)
 
         root = self._root

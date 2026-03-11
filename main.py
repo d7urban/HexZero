@@ -51,22 +51,43 @@ def run_headless(cfg: HexZeroConfig, resume_path: str = None) -> None:
     net     = build_net(cfg, device)
     trainer = Trainer(cfg, net, device)
 
-    buf_path  = os.path.join(cfg.checkpoint_dir, "replay_buffer.pt.gz")
-    best_path = resume_path or ckpt_io.best_checkpoint_path(cfg.checkpoint_dir)
+    buf_path   = os.path.join(cfg.checkpoint_dir, "replay_buffer.pt.gz")
+    best_path  = resume_path or ckpt_io.best_checkpoint_path(cfg.checkpoint_dir)
     board_size = cfg.initial_board_size
+
+    # training_state.json is written atomically after every iteration and is
+    # the single authoritative source for iteration counter and curriculum state.
+    ts = ckpt_io.load_training_state(cfg.checkpoint_dir)
+
     if best_path is None:
         print("No checkpoint found — saving initial weights…")
         best_path = trainer.save_checkpoint(0, board_size)
+        ckpt_io.promote_to_best(best_path, cfg.checkpoint_dir)
+        iteration     = 0
+        iters_on_size = 0
+        size_losses: list[float] = []
     else:
         trainer.load_checkpoint(best_path)
-        saved_size = ckpt_io.load(best_path, device).get("metrics", {}).get("board_size")
+        # Load once and reuse for board_size; avoids a second torch.load call.
+        ckpt_data  = ckpt_io.load(best_path, device)
+        saved_size = ckpt_data.get("metrics", {}).get("board_size")
         if saved_size and saved_size in cfg.board_sizes:
             board_size = saved_size
-        print(f"Resumed from {best_path}  (board {board_size}×{board_size})")
-    iteration     = ckpt_io.latest_iteration(cfg.checkpoint_dir)
-    ts            = ckpt_io.load_training_state(cfg.checkpoint_dir)
-    iters_on_size = ts.get("iters_on_size", 0)
-    size_losses: list[float] = ts.get("size_losses", [])
+
+        if resume_path:
+            # Explicit --checkpoint: the JSON may belong to a different run;
+            # trust the checkpoint's own counter and reset curriculum state.
+            iteration     = ckpt_data.get("iteration", 0)
+            iters_on_size = 0
+            size_losses   = []
+        else:
+            # Normal resume: JSON is consistent with best.pt (both updated
+            # together at the end of each accepted iteration).
+            iteration     = ts.get("iteration", 0)
+            iters_on_size = ts.get("iters_on_size", 0)
+            size_losses   = ts.get("size_losses", [])
+
+        print(f"Resumed from {best_path}  (board {board_size}×{board_size}  iter {iteration})")
 
     if os.path.exists(buf_path):
         print(f"Loading replay buffer from {buf_path}…", end="", flush=True)
@@ -80,12 +101,14 @@ def run_headless(cfg: HexZeroConfig, resume_path: str = None) -> None:
             print(f"Iteration {iteration}  |  board {board_size}×{board_size}")
 
             print("  Self-play…", end="", flush=True)
-            samples = run_self_play_parallel(
+            samples, swap_games, games_played = run_self_play_parallel(
                 cfg, best_path, device, board_size, cfg.games_per_iteration)
             for s in samples:
                 trainer.replay_buffer.add(s)
-            n_aug = cfg.games_per_iteration
-            print(f" {len(samples)} samples ({n_aug} games × 2 with augmentation)")
+            swap_info = ""
+            if cfg.use_pie_rule and games_played > 0:
+                swap_info = f"  swap {swap_games}/{games_played} ({100*swap_games//games_played}%)"
+            print(f" {len(samples)} samples ({games_played} games × 2){swap_info}")
             trainer.replay_buffer.save(buf_path)
 
             print("  Training…", end="", flush=True)
@@ -109,6 +132,7 @@ def run_headless(cfg: HexZeroConfig, resume_path: str = None) -> None:
             iters_on_size += 1
             if candidate_is_better(cw, chw, total, cfg.arena_win_threshold):
                 best_path = cand_path
+                ckpt_io.promote_to_best(best_path, cfg.checkpoint_dir)
                 print("  → New champion accepted.")
                 size_idx  = cfg.board_sizes.index(board_size)
                 next_idx  = size_idx + 1
