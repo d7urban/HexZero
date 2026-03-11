@@ -96,7 +96,7 @@ def run_self_play_parallel(
 
     progress_callback: optional callable(games_done, games_total).
     """
-    net  = build_net(cfg, device)
+    net  = build_net(cfg, device, compile=False)
     data = ckpt_io.load(checkpoint_path, device)
     ckpt_io.load_weights(net, data["model_state"])
 

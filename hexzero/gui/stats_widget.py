@@ -208,7 +208,11 @@ class StatsWidget(QWidget):
 
     @pyqtSlot(dict)
     def on_metrics(self, _metrics: dict) -> None:
-        self._phase_lbl.setText("Training")
+        if self._phase_lbl.text() != "Training":
+            # First metrics emission signals transition into training; reset bar.
+            self._set_phase("Training", 0, 1)
+        else:
+            self._phase_lbl.setText("Training")
 
     @pyqtSlot(int, int, int)
     def on_arena_progress(self, done: int, cw: int, total: int) -> None:

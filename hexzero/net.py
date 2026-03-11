@@ -85,14 +85,15 @@ class HexNet(nn.Module):
         return log_policy, value.squeeze(1)         # (B, H*W+1), (B,)
 
 
-def build_net(cfg: HexZeroConfig, device: torch.device = None) -> HexNet:
+def build_net(cfg: HexZeroConfig, device: torch.device = None,
+              compile: bool = True) -> HexNet:
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     torch.set_float32_matmul_precision("high")  # enable TF32 tensor cores
     net = HexNet(cfg).to(device)
     # torch.compile() (PyTorch ≥ 2.0) fuses ops and generates optimised kernels.
-    # Falls back silently on older installs or unsupported platforms.
-    if hasattr(torch, "compile"):
+    # Only compile when the caller knows it won't race with other compilations.
+    if compile and hasattr(torch, "compile"):
         try:
             net = torch.compile(net)
         except Exception:

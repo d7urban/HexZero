@@ -55,8 +55,11 @@ class HexZeroConfig:
     checkpoint_dir: str = "checkpoints"
     keep_last_n_checkpoints: int = 5
 
-    # Curriculum: when arena win rate on current size exceeds this, unlock next size
+    # Curriculum: when arena win rate on current size exceeds this, unlock next size.
+    # min_iters_per_size prevents advancing on the very first arena win; the agent
+    # must spend at least this many iterations on each size before promotion.
     curriculum_threshold: float = 0.60
+    min_iters_per_size: int = 5
 
     # Pie rule (swap rule): after BLACK's first move WHITE may swap colours.
     # Disable for very early training runs before the net has learned to play.

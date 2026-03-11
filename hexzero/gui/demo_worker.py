@@ -32,11 +32,13 @@ class DemoWorker(QThread):
         super().__init__(parent)
         self.cfg     = cfg
         self.signals = signals
-        self._stop   = False
-        self._size   = cfg.initial_board_size
+        self._stop    = False
+        self._restart = False
+        self._size    = cfg.initial_board_size
 
     def set_board_size(self, size: int) -> None:
-        self._size = size
+        self._size    = size
+        self._restart = True   # abort current game; outer loop restarts immediately
 
     def stop(self) -> None:
         self._stop = True
@@ -51,10 +53,11 @@ class DemoWorker(QThread):
 
     def _run_loop(self, device) -> None:
         while not self._stop:
+            self._restart = False
             # ----------------------------------------------------------
             # Load current best model (or untrained weights if none yet)
             # ----------------------------------------------------------
-            net = build_net(self.cfg, device)
+            net = build_net(self.cfg, device, compile=False)
             best_path = ckpt_io.best_checkpoint_path(self.cfg.checkpoint_dir)
             if best_path:
                 try:
@@ -84,7 +87,7 @@ class DemoWorker(QThread):
             # ----------------------------------------------------------
             # Play one full game, emitting a signal after each move
             # ----------------------------------------------------------
-            while not state.is_terminal() and not self._stop:
+            while not state.is_terminal() and not self._stop and not self._restart:
                 pi, _, info = agent.search(state, add_noise=False)
 
                 self.signals.game_step.emit(state.board.copy(), pi.copy(), info)
@@ -95,6 +98,9 @@ class DemoWorker(QThread):
                 agent.update_root(move)
                 state.apply_move(move)
                 self.msleep(_MOVE_DELAY_MS)
+
+            if self._restart:
+                continue
 
             if state.is_terminal() and not self._stop:
                 # Show the finished board for a moment

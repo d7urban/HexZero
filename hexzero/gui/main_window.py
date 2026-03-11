@@ -91,11 +91,12 @@ class TrainingWorker(QObject):
             except Exception as e:
                 self.signals.status_message.emit(f"Could not load replay buffer: {e}")
 
-        # Restore board size from persisted training state if available
+        # Restore board size and per-size iteration count from persisted state
         ts = ckpt_io.load_training_state(cfg.checkpoint_dir)
         if ts.get("board_size") and ts["board_size"] in cfg.board_sizes:
             board_size = ts["board_size"]
             size_idx   = cfg.board_sizes.index(board_size)
+        iters_on_size = ts.get("iters_on_size", 0)
 
         stop = self._stop_event
         while not stop.is_set():
@@ -170,31 +171,45 @@ class TrainingWorker(QObject):
             total    = cw + chw + draws
             win_rate = cw / total if total > 0 else 0.0
 
+            iters_on_size += 1
             ckpt_io.save_training_state(cfg.checkpoint_dir, {
                 "iteration": self._iteration,
                 "board_size": board_size,
                 "size_idx": size_idx,
                 "win_rate": win_rate,
+                "iters_on_size": iters_on_size,
             })
 
             if candidate_is_better(cw, chw, total, cfg.arena_win_threshold):
                 best_path = cand_path
                 self.signals.checkpoint_saved.emit(best_path)
 
-                # Curriculum: advance board size if win rate clears the threshold
+                # Curriculum: advance board size when win rate clears the threshold
+                # AND the agent has trained for the minimum number of iterations
+                # on the current size (prevents advancing on the first easy win).
                 next_idx = size_idx + 1
-                if win_rate >= cfg.curriculum_threshold and next_idx < len(cfg.board_sizes):
-                    size_idx   = next_idx
-                    board_size = cfg.board_sizes[size_idx]
+                can_advance = (
+                    win_rate >= cfg.curriculum_threshold
+                    and iters_on_size >= cfg.min_iters_per_size
+                    and next_idx < len(cfg.board_sizes)
+                )
+                if can_advance:
+                    size_idx      = next_idx
+                    board_size    = cfg.board_sizes[size_idx]
+                    iters_on_size = 0
                     self.signals.board_size_advanced.emit(board_size)
                     self.signals.status_message.emit(
                         f"Iteration {self._iteration} — curriculum advanced to "
                         f"{board_size}×{board_size}! ({cw}/{total}, {win_rate:.0%})"
                     )
                 else:
+                    remaining = max(0, cfg.min_iters_per_size - iters_on_size)
+                    suffix = (f"  (need {remaining} more iter(s) to advance)"
+                              if remaining > 0 and win_rate >= cfg.curriculum_threshold
+                              else "")
                     self.signals.status_message.emit(
                         f"Iteration {self._iteration} — new champion! "
-                        f"({cw}/{total}, {win_rate:.0%})"
+                        f"({cw}/{total}, {win_rate:.0%}){suffix}"
                     )
             else:
                 self.signals.status_message.emit(
@@ -218,7 +233,10 @@ class MainWindow(QMainWindow):
         self.signals = TrainingSignals()
 
         self._device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self._net    = build_net(cfg, self._device)
+        # compile=False: torch.compile is not thread-safe during JIT compilation;
+        # multiple background threads (demo, self-play, arena) running simultaneously
+        # would race on dynamo's global bytecode patcher. TF32 still applies.
+        self._net    = build_net(cfg, self._device, compile=False)
 
         # Auto-load best checkpoint before building UI so the board and
         # curriculum ladder reflect the state training was left in.

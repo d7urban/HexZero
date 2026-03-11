@@ -51,7 +51,9 @@ def run_headless(cfg: HexZeroConfig, resume_path: str = None) -> None:
         if saved_size and saved_size in cfg.board_sizes:
             board_size = saved_size
         print(f"Resumed from {best_path}  (board {board_size}×{board_size})")
-    iteration  = ckpt_io.latest_iteration(cfg.checkpoint_dir)
+    iteration     = ckpt_io.latest_iteration(cfg.checkpoint_dir)
+    ts            = ckpt_io.load_training_state(cfg.checkpoint_dir)
+    iters_on_size = ts.get("iters_on_size", 0)
 
     if os.path.exists(buf_path):
         print(f"Loading replay buffer from {buf_path}…", end="", flush=True)
@@ -84,11 +86,27 @@ def run_headless(cfg: HexZeroConfig, resume_path: str = None) -> None:
             total = cw + chw + draws
             print(f" candidate {cw}/{total}  champion {chw}/{total}")
 
+            iters_on_size += 1
             if candidate_is_better(cw, chw, total, cfg.arena_win_threshold):
                 best_path = cand_path
                 print("  → New champion accepted.")
+                size_idx  = cfg.board_sizes.index(board_size)
+                next_idx  = size_idx + 1
+                if (win_rate := cw / total) >= cfg.curriculum_threshold \
+                        and iters_on_size >= cfg.min_iters_per_size \
+                        and next_idx < len(cfg.board_sizes):
+                    board_size    = cfg.board_sizes[next_idx]
+                    iters_on_size = 0
+                    print(f"  → Curriculum advanced to {board_size}×{board_size}!")
             else:
                 print("  → Champion retained.")
+
+            ckpt_io.save_training_state(cfg.checkpoint_dir, {
+                "iteration": iteration,
+                "board_size": board_size,
+                "size_idx": cfg.board_sizes.index(board_size),
+                "iters_on_size": iters_on_size,
+            })
 
     except KeyboardInterrupt:
         print("\nTraining interrupted. Checkpoint saved at:", best_path)

@@ -74,8 +74,8 @@ def run_arena(
     """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    candidate = build_net(cfg, device)
-    champion  = build_net(cfg, device)
+    candidate = build_net(cfg, device, compile=False)
+    champion  = build_net(cfg, device, compile=False)
 
     cand_data = ckpt_io.load(candidate_path, device)
     champ_data = ckpt_io.load(champion_path, device)
