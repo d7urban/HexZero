@@ -51,14 +51,14 @@ TF32 tensor cores are enabled on Ampere+ GPUs (`torch.set_float32_matmul_precisi
 
 | Plane | Description |
 |---|---|
-| `black_stones` | 1 where BLACK stone placed |
-| `white_stones` | 1 where WHITE stone placed |
-| `black_2bridge` | Empty cells that are carriers of a BLACK two-bridge |
-| `white_2bridge` | Empty cells that are carriers of a WHITE two-bridge |
-| `black_edge_dist` | min BFS distance to either of BLACK's two target edges (normalised) |
-| `white_edge_dist` | min BFS distance to either of WHITE's two target edges (normalised) |
-| `black_components` | Component size / total BLACK stones for each BLACK stone (0 elsewhere) |
-| `white_components` | Component size / total WHITE stones for each WHITE stone (0 elsewhere) |
+| `black_stones` | 1 where Blue stone placed |
+| `white_stones` | 1 where Red stone placed |
+| `black_2bridge` | Empty cells that are carriers of a Blue two-bridge |
+| `white_2bridge` | Empty cells that are carriers of a Red two-bridge |
+| `black_edge_dist` | min BFS distance to either of Blue's two target edges (normalised) |
+| `white_edge_dist` | min BFS distance to either of Red's two target edges (normalised) |
+| `black_components` | Component size / total Blue stones for each Blue stone (0 elsewhere) |
+| `white_components` | Component size / total Red stones for each Red stone (0 elsewhere) |
 
 The edge-distance planes use the minimum distance to **either** target edge (not just one), giving a symmetric, non-monotonic signal that avoids biasing the untrained network toward a particular edge of the board.
 
