@@ -35,7 +35,7 @@ def _play_one_game(
     """
     agent = MCTSAgent(
         infer_fn=infer_fn,
-        simulations=cfg.mcts_simulations,
+        simulations=cfg.sims_for_size(board_size),
         cpuct=cfg.cpuct,
         dirichlet_alpha=cfg.dirichlet_alpha,
         dirichlet_epsilon=cfg.dirichlet_epsilon,
@@ -111,7 +111,9 @@ def run_self_play_parallel(
     data = ckpt_io.load(checkpoint_path, device)
     ckpt_io.load_weights(net, data["model_state"])
 
-    server = InferenceServer(net, device)
+    server = InferenceServer(net, device,
+                             max_batch=cfg.inference_max_batch,
+                             max_wait_ms=cfg.inference_max_wait_ms)
 
     all_samples: list = []
     lock        = threading.Lock()

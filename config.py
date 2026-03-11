@@ -21,19 +21,29 @@ class HexZeroConfig:
     num_input_planes: int = 8
 
     # MCTS
-    mcts_simulations: int = 50
+    # Simulations scale with board area to keep visits-per-legal-move roughly
+    # constant.  mcts_simulations_per_size is indexed in parallel with board_sizes;
+    # if a size has no entry the last value is used as a fallback.
+    mcts_simulations: int = 50   # used directly when pie_rule is off / for arena
+    mcts_simulations_per_size: list[int] = field(default_factory=lambda: [50, 100, 150])
     cpuct: float = 1.25
     dirichlet_alpha: float = 0.3
     dirichlet_epsilon: float = 0.25
     temperature_moves: int = 20      # use temp=1 for first N moves, then 0
     temperature: float = 1.0
 
-    # Self-play — default to half the logical CPUs so the demo and training
-    # threads always have cores to run on; minimum 1, maximum 8.
+    # Self-play — workers spend most of their time blocked on GPU inference
+    # (releasing the GIL), so more workers = larger inference batches without
+    # proportionally more CPU pressure.  Cap at 32; raise if GPU is still idle.
     num_self_play_workers: int = field(
-        default_factory=lambda: max(1, min(8, (os.cpu_count() or 2) // 2))
+        default_factory=lambda: max(1, min(32, (os.cpu_count() or 2)))
     )
     games_per_iteration: int = 100
+
+    # Inference server — larger batches and slightly longer accumulation window
+    # keep the GPU busy across many concurrent MCTS workers.
+    inference_max_batch: int = 256
+    inference_max_wait_ms: float = 10.0
 
     # Training
     batch_size: int = 256
@@ -55,6 +65,10 @@ class HexZeroConfig:
     # Arena
     arena_games: int = 40
     arena_win_threshold: float = 0.55
+    # Stochastic first N half-moves per arena game so each game has a different
+    # opening; after that both agents play greedy.  Eliminates the degenerate
+    # "all-or-nothing" outcome caused by fully deterministic play.
+    arena_temperature_moves: int = 4
 
     # Checkpointing
     checkpoint_dir: str = "checkpoints"
@@ -72,3 +86,12 @@ class HexZeroConfig:
     # Pie rule (swap rule): after BLACK's first move WHITE may swap colours.
     # Disable for very early training runs before the net has learned to play.
     use_pie_rule: bool = True
+
+    def sims_for_size(self, board_size: int) -> int:
+        """Return the simulation count to use for a given board size."""
+        try:
+            idx = self.board_sizes.index(board_size)
+            return self.mcts_simulations_per_size[idx]
+        except (ValueError, IndexError):
+            return self.mcts_simulations_per_size[-1] if self.mcts_simulations_per_size \
+                else self.mcts_simulations

@@ -52,6 +52,12 @@ class Trainer:
         self.global_step = 0
         self.metrics_history: deque = deque(maxlen=10_000)
 
+        # Mixed precision: autocast + GradScaler on CUDA; no-ops on CPU.
+        # init_scale=2**10 avoids fp16 overflow on early steps with a freshly
+        # initialised network (default 65536 is too aggressive for small models).
+        self._use_amp = self.device.type == "cuda"
+        self._scaler  = torch.amp.GradScaler("cuda", enabled=self._use_amp, init_scale=2**10)
+
     def load_checkpoint(self, path: str) -> None:
         data = ckpt_io.load(path, self.device)
         ckpt_io.load_weights(self.net, data["model_state"])
@@ -104,20 +110,23 @@ class Trainer:
         size_scalar = batch["size_scalar"].to(self.device)
 
         self.net.train()
-        log_pi, value_pred = self.net(features, size_scalar)
+        with torch.amp.autocast("cuda", enabled=self._use_amp):
+            log_pi, value_pred = self.net(features, size_scalar)
 
-        # Policy loss: cross-entropy = -sum(target * log_pred)
-        policy_loss = -(policy_tgt * log_pi).sum(dim=1).mean()
+            # Policy loss: cross-entropy = -sum(target * log_pred)
+            policy_loss = -(policy_tgt * log_pi).sum(dim=1).mean()
 
-        # Value loss: MSE
-        value_loss = F.mse_loss(value_pred, value_tgt)
+            # Value loss: MSE
+            value_loss = F.mse_loss(value_pred, value_tgt)
 
-        loss = policy_loss + cfg.value_loss_weight * value_loss
+            loss = policy_loss + cfg.value_loss_weight * value_loss
 
         self.optimizer.zero_grad()
-        loss.backward()
+        self._scaler.scale(loss).backward()
+        self._scaler.unscale_(self.optimizer)
         torch.nn.utils.clip_grad_norm_(self.net.parameters(), max_norm=1.0)
-        self.optimizer.step()
+        self._scaler.step(self.optimizer)
+        self._scaler.update()
         self.scheduler.step()
 
         self.global_step += 1

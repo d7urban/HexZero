@@ -398,10 +398,13 @@ class MainWindow(QMainWindow):
         toolbar.addWidget(QLabel("  Training sims: "))
         self._sims_spin = QSpinBox()
         self._sims_spin.setRange(10, 2000)
-        self._sims_spin.setValue(self.cfg.mcts_simulations)
+        self._sims_spin.setValue(self.cfg.mcts_simulations_per_size[0]
+                                  if self.cfg.mcts_simulations_per_size
+                                  else self.cfg.mcts_simulations)
         self._sims_spin.setSingleStep(50)
         self._sims_spin.setToolTip(
-            "MCTS simulations per move during self-play and arena.\n"
+            "MCTS simulations per move for the smallest board size.\n"
+            "Larger board sizes scale up proportionally (see mcts_simulations_per_size).\n"
             "The live board demo always uses 50 sims for display speed."
         )
         toolbar.addWidget(self._sims_spin)
@@ -552,6 +555,13 @@ class MainWindow(QMainWindow):
     @pyqtSlot(int)
     def _on_sims_changed(self, value: int) -> None:
         self.cfg.mcts_simulations = value
+        # Scale all per-size entries proportionally so relative ratios are preserved.
+        per_size = self.cfg.mcts_simulations_per_size
+        base = per_size[0] if per_size else value
+        if base > 0 and per_size:
+            self.cfg.mcts_simulations_per_size = [
+                max(1, round(s * value / base)) for s in per_size
+            ]
 
     # ------------------------------------------------------------------
     # Close

@@ -48,8 +48,10 @@ def _play_game(
         agent   = agents[player]
         size    = state.size
         pi, _, _ = agent.search(state, add_noise=False)
-        idx     = int(np.argmax(pi))  # greedy in arena
-        move    = SWAP_MOVE if idx == size * size else (idx // size, idx % size)
+        # pi already has temperature applied by MCTSAgent.search:
+        # stochastic for early moves (varied openings), one-hot after that.
+        idx  = int(np.random.choice(len(pi), p=pi))
+        move = SWAP_MOVE if idx == size * size else (idx // size, idx % size)
         agent.update_root(move)
         # Update the other agent's tree too
         other = agents[-player]
@@ -101,10 +103,13 @@ def run_arena(
             black_infer, white_infer = champ_infer, cand_infer
             cand_color = WHITE
 
-        black_agent = MCTSAgent(infer_fn=black_infer, simulations=cfg.mcts_simulations,
-                                cpuct=cfg.cpuct, dirichlet_epsilon=0.0)
-        white_agent = MCTSAgent(infer_fn=white_infer, simulations=cfg.mcts_simulations,
-                                cpuct=cfg.cpuct, dirichlet_epsilon=0.0)
+        sims = cfg.sims_for_size(board_size)
+        black_agent = MCTSAgent(infer_fn=black_infer, simulations=sims,
+                                cpuct=cfg.cpuct, dirichlet_epsilon=0.0,
+                                temperature_moves=cfg.arena_temperature_moves)
+        white_agent = MCTSAgent(infer_fn=white_infer, simulations=sims,
+                                cpuct=cfg.cpuct, dirichlet_epsilon=0.0,
+                                temperature_moves=cfg.arena_temperature_moves)
 
         state  = HexState(board_size, pie_rule=cfg.use_pie_rule)
         winner = _play_game(state, black_agent, white_agent)
