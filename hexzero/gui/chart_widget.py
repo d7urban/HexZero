@@ -2,8 +2,10 @@
 ChartWidget: live training curves using pyqtgraph.
 
 Displays two plots side by side:
-  Left:  Policy loss + Value loss (two lines)
-  Right: Policy top-1 accuracy
+  Left:  Policy loss + Value loss (raw + MA overlay)
+  Right: Policy top-1 accuracy (raw + MA overlay)
+
+Plot titles update with the current moving-average value.
 """
 
 from collections import deque
@@ -13,7 +15,15 @@ import pyqtgraph as pg
 from PyQt6.QtCore import pyqtSlot
 from PyQt6.QtWidgets import QHBoxLayout, QWidget
 
-_WINDOW = 2000   # number of recent steps shown
+_WINDOW    = 2000   # number of recent steps kept in ring buffer
+_MA_WINDOW = 50     # moving-average window (steps)
+
+
+def _moving_avg(data: np.ndarray, w: int) -> np.ndarray | None:
+    """Convolution-based moving average.  Returns None when len(data) < w."""
+    if len(data) < w:
+        return None
+    return np.convolve(data, np.ones(w) / w, mode="valid")
 
 
 class ChartWidget(QWidget):
@@ -30,11 +40,20 @@ class ChartWidget(QWidget):
         self._loss_plot.addLegend()
         self._loss_plot.setLabel("left", "Loss")
         self._loss_plot.setLabel("bottom", "Step")
+
+        # Raw curves — thin, semi-transparent
         self._policy_loss_curve = self._loss_plot.plot(
-            pen=pg.mkPen(color=(100, 180, 255), width=1.5), name="Policy Loss"
+            pen=pg.mkPen(color=(100, 180, 255, 80), width=1), name="Policy Loss"
         )
         self._value_loss_curve = self._loss_plot.plot(
-            pen=pg.mkPen(color=(255, 120, 60), width=1.5), name="Value Loss"
+            pen=pg.mkPen(color=(255, 120, 60, 80), width=1), name="Value Loss"
+        )
+        # MA overlay curves — same colour, thicker and opaque
+        self._policy_loss_ma = self._loss_plot.plot(
+            pen=pg.mkPen(color=(100, 180, 255), width=2), name=f"Policy MA-{_MA_WINDOW}"
+        )
+        self._value_loss_ma = self._loss_plot.plot(
+            pen=pg.mkPen(color=(255, 120, 60), width=2), name=f"Value MA-{_MA_WINDOW}"
         )
         layout.addWidget(self._loss_plot)
 
@@ -43,8 +62,14 @@ class ChartWidget(QWidget):
         self._acc_plot.setLabel("left", "Accuracy")
         self._acc_plot.setLabel("bottom", "Step")
         self._acc_plot.setYRange(0, 1)
+
+        # Raw curve — thin, semi-transparent
         self._acc_curve = self._acc_plot.plot(
-            pen=pg.mkPen(color=(100, 220, 100), width=1.5)
+            pen=pg.mkPen(color=(100, 220, 100, 80), width=1)
+        )
+        # MA overlay curve
+        self._acc_ma = self._acc_plot.plot(
+            pen=pg.mkPen(color=(100, 220, 100), width=2)
         )
         layout.addWidget(self._acc_plot)
 
@@ -62,9 +87,36 @@ class ChartWidget(QWidget):
         self._accuracy.append(metrics["policy_acc"])
 
         steps = np.array(self._steps)
-        self._policy_loss_curve.setData(steps, np.array(self._policy_loss))
-        self._value_loss_curve.setData(steps, np.array(self._value_loss))
-        self._acc_curve.setData(steps, np.array(self._accuracy))
+        pl    = np.array(self._policy_loss)
+        vl    = np.array(self._value_loss)
+        ac    = np.array(self._accuracy)
+
+        # Raw curves
+        self._policy_loss_curve.setData(steps, pl)
+        self._value_loss_curve.setData(steps, vl)
+        self._acc_curve.setData(steps, ac)
+
+        # Moving averages
+        pl_ma = _moving_avg(pl, _MA_WINDOW)
+        vl_ma = _moving_avg(vl, _MA_WINDOW)
+        ac_ma = _moving_avg(ac, _MA_WINDOW)
+
+        ma_x = steps[_MA_WINDOW - 1:]   # x positions for mode='valid' output
+        if pl_ma is not None:
+            self._policy_loss_ma.setData(ma_x, pl_ma)
+        if vl_ma is not None:
+            self._value_loss_ma.setData(ma_x, vl_ma)
+        if ac_ma is not None:
+            self._acc_ma.setData(ma_x, ac_ma)
+
+        # Tag titles with current MA value
+        p_str = f"{pl_ma[-1]:.3f}" if pl_ma is not None else "—"
+        v_str = f"{vl_ma[-1]:.3f}" if vl_ma is not None else "—"
+        a_str = f"{ac_ma[-1]:.1%}" if ac_ma is not None else "—"
+        self._loss_plot.setTitle(
+            f"Loss  ·  Policy {p_str}  ·  Value {v_str}"
+        )
+        self._acc_plot.setTitle(f"Policy Accuracy  ·  {a_str}")
 
     def clear(self) -> None:
         self._steps.clear()
@@ -74,3 +126,8 @@ class ChartWidget(QWidget):
         self._policy_loss_curve.setData([], [])
         self._value_loss_curve.setData([], [])
         self._acc_curve.setData([], [])
+        self._policy_loss_ma.setData([], [])
+        self._value_loss_ma.setData([], [])
+        self._acc_ma.setData([], [])
+        self._loss_plot.setTitle("Loss")
+        self._acc_plot.setTitle("Policy Accuracy")
