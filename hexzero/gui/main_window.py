@@ -63,7 +63,8 @@ def _loss_plateau(losses: list[float], window: int, threshold: float) -> bool:
     start  = recent[0]
     if start <= 0:
         return True
-    return (start - recent[-1]) / start < threshold
+    improvement = (start - recent[-1]) / start
+    return 0.0 <= improvement < threshold
 
 
 # ---------------------------------------------------------------------------
@@ -106,13 +107,16 @@ class TrainingWorker(QObject):
         size_idx   = (cfg.board_sizes.index(board_size)
                       if board_size in cfg.board_sizes else 0)
 
-        # Bootstrap: save initial checkpoint if none exists yet
+        # Bootstrap: save initial checkpoint if none exists yet.
+        # After promote_to_best, best_path always points to the stable
+        # "best.pt" path so it is never pruned by the rolling checkpoint window.
         best_path = ckpt_io.best_checkpoint_path(cfg.checkpoint_dir)
         if best_path is None:
             self.signals.status_message.emit("Saving initial checkpoint…")
-            best_path = self.trainer.save_checkpoint(0, board_size)
-            ckpt_io.promote_to_best(best_path, cfg.checkpoint_dir)
-            self.signals.checkpoint_saved.emit(best_path)
+            init_path = self.trainer.save_checkpoint(0, board_size)
+            ckpt_io.promote_to_best(init_path, cfg.checkpoint_dir)
+            best_path = ckpt_io.best_checkpoint_path(cfg.checkpoint_dir)
+            self.signals.checkpoint_saved.emit(init_path)
 
         # Resume iteration counter from disk so we never overwrite / prune a
         # freshly-saved candidate checkpoint on the very first save.
@@ -229,9 +233,9 @@ class TrainingWorker(QObject):
             })
 
             if candidate_is_better(cw, chw, total, cfg.arena_win_threshold):
-                best_path = cand_path
-                ckpt_io.promote_to_best(best_path, cfg.checkpoint_dir)
-                self.signals.checkpoint_saved.emit(best_path)
+                ckpt_io.promote_to_best(cand_path, cfg.checkpoint_dir)
+                self.signals.checkpoint_saved.emit(cand_path)
+                # best_path remains "best.pt" — stable, never pruned
 
                 next_idx = size_idx + 1
                 can_advance = (
