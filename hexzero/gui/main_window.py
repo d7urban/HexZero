@@ -184,6 +184,9 @@ class TrainingWorker(QObject):
             if metrics_list:
                 mean_loss = sum(m["policy_loss"] for m in metrics_list) / len(metrics_list)
                 size_losses.append(mean_loss)
+                # Keep only the last window we actually need; prevents unbounded growth
+                # at the final board size where size_losses is never reset.
+                size_losses = size_losses[-cfg.min_iters_per_size:]
                 self._emit_plateau(size_losses)
 
             if stop.is_set():
