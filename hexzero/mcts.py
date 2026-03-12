@@ -170,7 +170,7 @@ class MCTSAgent:
         while node.is_expanded and not state.is_terminal():
             move, child = self._select_child(node)
             state.apply_move(move)
-            path.append((node, move))
+            path.append((child, move))   # child, not node — backup walks visited nodes
             node = child
 
         # Expansion + evaluation
