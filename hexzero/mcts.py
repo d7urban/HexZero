@@ -9,6 +9,12 @@ infer_fn signature:
     policy is a probability distribution over all cells in row-major order,
     with the final element being the probability of the pie-rule swap move.
     value is from the current player's perspective in [-1, 1].
+
+Performance note: Node objects do NOT store a copy of the game state.
+_simulate clones the root state once per simulation and applies moves
+in-place as it descends the tree.  This replaces the original design
+that cloned the state for every legal move at expansion time (O(moves)
+allocations per expansion → hours at 11×11/150 sims).
 """
 
 import math
@@ -20,14 +26,13 @@ from hexzero.game import SWAP_MOVE, HexState
 
 
 class Node:
-    __slots__ = ("N", "W", "children", "is_expanded", "prior", "state")
+    __slots__ = ("N", "W", "children", "is_expanded", "prior")
 
-    def __init__(self, state: HexState, prior: float = 0.0):
-        self.state = state
+    def __init__(self, prior: float = 0.0):
         self.prior = prior        # P(s, a) from policy network
         self.N: int = 0           # visit count
         self.W: float = 0.0       # total value
-        self.children: dict[tuple[int, int], Node] = {}
+        self.children: dict = {}
         self.is_expanded: bool = False
 
     @property
@@ -58,6 +63,9 @@ class MCTSAgent:
         self.temperature = temperature
         self.temperature_moves = temperature_moves
         self._root: Node | None = None
+        # move_count of the game state at the current root — used for tree-reuse
+        # validity check without storing a copy of the board.
+        self._root_move_count: int | None = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -65,6 +73,7 @@ class MCTSAgent:
 
     def reset(self) -> None:
         self._root = None
+        self._root_move_count = None
 
     def search(
         self,
@@ -75,28 +84,28 @@ class MCTSAgent:
         Run MCTS simulations from `state`.
 
         Returns:
-            pi      : policy vector (H*W,) — visit count distribution
+            pi      : policy vector (H*W+1,) — visit count distribution
             value   : estimated value for current player
             info    : dict with debug info (top moves, root N, etc.)
         """
         size = state.size
         n_cells = size * size
 
-        root = self._root
-        if (root is None
-                or root.state.current_player != state.current_player
-                or not np.array_equal(root.state.board, state.board)):
-            self._root = Node(state)
+        # Tree reuse: keep the existing root if move_count matches.
+        if (self._root is None
+                or self._root_move_count != state.move_count):
+            self._root = Node()
+            self._root_move_count = state.move_count
 
         root = self._root
         if not root.is_expanded:
-            self._expand(root)
+            self._expand(root, state)
 
         if add_noise:
             self._add_dirichlet_noise(root)
 
         for _ in range(self.simulations):
-            self._simulate(root)
+            self._simulate(root, state)
 
         # Build policy from visit counts (always n_cells+1 to include swap slot)
         pi = np.zeros(n_cells + 1, dtype=np.float32)
@@ -132,38 +141,48 @@ class MCTSAgent:
             return SWAP_MOVE
         return (idx // size, idx % size)
 
-    def update_root(self, move: tuple[int, int]) -> None:
+    def update_root(self, move) -> None:
         """Reuse subtree after a move is played (tree reuse)."""
         if self._root is not None and move in self._root.children:
             self._root = self._root.children[move]
+            if self._root_move_count is not None:
+                self._root_move_count += 1
         else:
             self._root = None
+            self._root_move_count = None
 
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
 
-    def _simulate(self, root: Node) -> None:
-        path: list[tuple[Node, tuple[int, int] | None]] = []
+    def _simulate(self, root: Node, root_state: HexState) -> None:
+        """
+        One MCTS simulation.
+
+        Clones root_state once and applies moves in-place while descending
+        the tree — no per-child state copies needed.
+        """
+        path: list[tuple[Node, object]] = []
         node = root
+        state = root_state.clone()   # single clone for the entire simulation
 
         # Selection: descend until unexpanded or terminal
-        while node.is_expanded and not node.state.is_terminal():
-            move, node = self._select_child(node)
+        while node.is_expanded and not state.is_terminal():
+            move, child = self._select_child(node)
+            state.apply_move(move)
             path.append((node, move))
+            node = child
 
         # Expansion + evaluation
-        if node.state.is_terminal():
-            # Winner is opposite of current player (last player to move won)
-            value = node.state.result_for(node.state.current_player)
+        if state.is_terminal():
+            value = state.result_for(state.current_player)
         else:
-            # _expand calls infer_fn internally; reuse its value directly
-            value = self._expand(node)
+            value = self._expand(node, state)
 
         # Backup
         self._backup(root, path, value)
 
-    def _select_child(self, node: Node) -> tuple[tuple[int, int], Node]:
+    def _select_child(self, node: Node) -> tuple[object, Node]:
         parent_N = node.N
         best_score = -float("inf")
         best_move = None
@@ -176,9 +195,11 @@ class MCTSAgent:
                 best_child = child
         return best_move, best_child
 
-    def _expand(self, node: Node) -> float:
-        """Expand node, returning the network value for backup."""
-        state = node.state
+    def _expand(self, node: Node, state: HexState) -> float:
+        """
+        Expand node using the given state.  Child nodes store only the prior
+        probability — no state clone per child.  Returns the network value.
+        """
         legal = state.legal_moves()
         if not legal:
             node.is_expanded = True
@@ -187,11 +208,8 @@ class MCTSAgent:
         policy, value = self.infer_fn(state)
         size = state.size
 
-        # Extract raw priors for legal moves only, then renormalise so they
-        # sum to 1.  This prevents probability mass assigned to illegal
-        # actions (e.g. the swap slot after move 1) from weakening PUCT
-        # exploration of the legal moves.
-        raw: dict[tuple[int, int], float] = {}
+        # Extract raw priors for legal moves only, then renormalise.
+        raw: dict = {}
         for move in legal:
             if move == SWAP_MOVE:
                 raw[move] = float(policy[size * size])
@@ -208,9 +226,7 @@ class MCTSAgent:
             raw = dict.fromkeys(legal, uniform)
 
         for move, prior in raw.items():
-            child_state = state.clone()
-            child_state.apply_move(move)
-            node.children[move] = Node(child_state, prior=prior)
+            node.children[move] = Node(prior=prior)   # no state clone
 
         node.is_expanded = True
         return value
@@ -233,10 +249,6 @@ class MCTSAgent:
         if not node.children:
             return
         moves = list(node.children.keys())
-        # Swap is a binary strategic decision (swap or don't), not 1-of-N.
-        # Give it the same expected noise share as all other moves combined by
-        # scaling its alpha by len(moves).  Without this, swap gets 1/N of the
-        # noise and the network can't bootstrap learning to swap or not swap.
         alphas = [
             self.dirichlet_alpha * len(moves) if move == SWAP_MOVE
             else self.dirichlet_alpha

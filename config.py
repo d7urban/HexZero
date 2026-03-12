@@ -43,7 +43,7 @@ class HexZeroConfig:
     # Inference server — larger batches and slightly longer accumulation window
     # keep the GPU busy across many concurrent MCTS workers.
     inference_max_batch: int = 256
-    inference_max_wait_ms: float = 10.0
+    inference_max_wait_ms: float = 2.0
 
     # Training
     batch_size: int = 256
