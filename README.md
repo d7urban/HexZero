@@ -27,7 +27,7 @@ Tic-tac-toe is too small (negamax solves it trivially); Go and Chess have rule o
 A single size-agnostic ResNet shared across all board sizes:
 
 ```
-Input: (B, 8, H, W)   — 8 feature planes
+Input: (B, 9, H, W)   — 9 feature planes
   │
   ▼
 Stem: Conv2d(3×3, 128) → BN → ReLU
@@ -59,12 +59,15 @@ TF32 tensor cores are enabled on Ampere+ GPUs (`torch.set_float32_matmul_precisi
 | `white_edge_dist` | min BFS distance to either of Red's two target edges (normalised) |
 | `black_components` | Component size / total Blue stones for each Blue stone (0 elsewhere) |
 | `white_components` | Component size / total Red stones for each Red stone (0 elsewhere) |
+| `to_move` | 1 everywhere if Blue to move, 0 everywhere if Red to move |
 
 The edge-distance planes use the minimum distance to **either** target edge (not just one), giving a symmetric, non-monotonic signal that avoids biasing the untrained network toward a particular edge of the board.
 
 Two-bridges are the fundamental tactical unit of Hex — a pair of stones with two shared empty neighbours forming a virtually unbreakable connection. Explicit planes let the network learn connection-based reasoning far faster than from raw board state alone. All six canonical 2-bridge patterns are covered (one per adjacent pair of hex directions).
 
 The component planes encode **how consolidated** a player's position is: stones in a large connected group score near 1.0, isolated stones score near 0. This is order-invariant and spatially unbiased — only connectivity matters, not where on the board the group sits.
+
+The `to_move` plane is essential for the value head. The value target is always from the current player's perspective (±1), but planes 0–7 are in absolute Blue/Red coordinates. Without `to_move`, the value head sees the same features for equivalent positions regardless of whose turn it is, causing the gradients for +1 and -1 targets to cancel and the head to predict 0 for every position.
 
 ### Pie Rule (Swap Rule)
 
@@ -85,9 +88,11 @@ PUCT(s, a) = Q(s, a) + c_puct · P(s, a) · √N(s) / (1 + N(s, a))
 - Subtree reuse across moves within a game (keyed on `move_count` to survive state mutation)
 - Policy vector is always H×W+1; swap slot is masked out when not legal
 
+**Performance**: `Node` objects store only the prior, visit count, and total value — no game state. Each simulation clones the root state once and applies moves in-place as it descends, avoiding the O(legal\_moves) state allocations per expansion that make naïve implementations orders of magnitude slower on 11×11.
+
 ### Self-play
 
-Games are played across worker threads (default: cpu\_count / 2) sharing a single **InferenceServer** — a background thread that collects MCTS state-evaluation requests from all workers, batches them, runs one GPU forward pass, and distributes results. This eliminates model duplication in VRAM and keeps the GPU saturated without spawning subprocesses.
+Games are played across worker threads (default: cpu\_count) sharing a single **InferenceServer** — a background thread that collects MCTS state-evaluation requests from all workers, batches them, runs one GPU forward pass, and distributes results. This eliminates model duplication in VRAM and keeps the GPU saturated without spawning subprocesses.
 
 ### Training Loop
 
@@ -99,6 +104,7 @@ repeat:
   4. Train          — 200 AdamW gradient steps, dynamic batching by board size
   5. Arena          — candidate vs champion (40 games, alternating colours)
   6. Promote        — replace champion if candidate wins ≥ 55% of games
+  7. Curriculum     — advance board size if plateau or max-iters reached (see below)
 ```
 
 The replay buffer is saved to `checkpoints/replay_buffer.pt.gz` after each self-play phase and reloaded on restart, eliminating the cold-start penalty.
@@ -111,12 +117,16 @@ Self-play data is non-stationary (the policy distribution shifts as the network 
 
 ### Curriculum
 
-Training starts on 7×7. Two conditions must both be met to advance to the next size:
+Training starts on 7×7 and advances through `board_sizes` (default `[7, 9, 11]`). Advancement is checked every iteration and triggers when **both**:
 
 1. At least `min_iters_per_size` (default 5) iterations completed on the current size.
-2. Policy loss has **plateaued**: the relative improvement in mean policy loss over the last `min_iters_per_size` iterations is below `loss_plateau_threshold` (default 3%). This detects that the network has extracted most of what it can learn at the current board size.
+2. **Either** of:
+   - **Loss plateau**: relative improvement in mean policy loss over the last `min_iters_per_size` iterations is below `loss_plateau_threshold` (default 3%).
+   - **Hard cap**: `max_iters_per_size` (default 20) iterations reached — safety valve so training never stalls permanently if the network peaks without triggering a plateau.
 
-The arena win rate is used only to decide whether to promote the candidate checkpoint to champion — it is not used as a curriculum signal. With 50 MCTS simulations, the win rate is near-binary (either ~50% when models are equal or ~100% when the candidate is meaningfully better), making it an uninformative threshold for curriculum advancement.
+Curriculum advancement is independent of the arena result. The champion is promoted or retained each iteration; the curriculum is evaluated separately. This prevents a deadlock where the network has plateaued but can no longer beat the current champion.
+
+The arena win rate is used only to decide whether to promote the candidate checkpoint to champion — it is not used as a curriculum signal.
 
 The live demo board follows the curriculum immediately when the size advances, abandoning the current game mid-play. Knowledge transfers because the convolutional weights are size-agnostic. Board size and per-size iteration count are persisted in `checkpoints/training_state.json` so the curriculum ladder is restored correctly on restart.
 
@@ -132,7 +142,7 @@ HexZero/
 ├── requirements.txt
 └── hexzero/
     ├── game.py              — Hex engine: union-find, winning path, pie rule
-    ├── features.py          — 8-plane feature tensor construction
+    ├── features.py          — 9-plane feature tensor construction
     ├── net.py               — HexNet: ResNet + policy/value heads, torch.compile
     ├── mcts.py              — PUCT MCTS: Node, MCTSAgent, tree reuse, swap action
     ├── inference_server.py  — batched GPU inference server for self-play workers
@@ -144,7 +154,7 @@ HexZero/
     └── gui/
         ├── signals.py           — Qt signal carriers (cross-thread comms)
         ├── board_widget.py      — pointy-top hex board, policy heatmap, winning path
-        ├── chart_widget.py      — live loss / accuracy curves (pyqtgraph)
+        ├── chart_widget.py      — live loss / accuracy curves with MA overlay (pyqtgraph)
         ├── mcts_widget.py       — top-moves table with visit count shading
         ├── stats_widget.py      — stats bar: iteration, self-play, arena, curriculum
         ├── demo_worker.py       — background thread playing live demo games
@@ -181,7 +191,7 @@ python main.py --checkpoint checkpoints/best.pt
 
 The GUI shows:
 - **Board** — live demo games with policy heatmap, last-move highlight, and winning-path indicator (green dots)
-- **Charts** — policy loss, value loss, and policy accuracy in real time
+- **Charts** — policy loss, value loss, and policy accuracy with moving-average overlays in real time
 - **MCTS viewer** — top 5 moves by visit count, with Q-value and prior
 - **Stats bar** — iteration counter, self-play / arena progress, replay buffer size, curriculum ladder
 
@@ -214,7 +224,7 @@ python main.py --headless --checkpoint checkpoints/best.pt
 | `--board-size N` | 7 | Initial board size |
 | `--checkpoint PATH` | auto | Resume from checkpoint |
 | `--simulations N` | 50 | MCTS simulations per move |
-| `--workers N` | cpu\_count/2 | Self-play worker threads |
+| `--workers N` | cpu\_count | Self-play worker threads |
 
 ---
 
@@ -230,11 +240,12 @@ All hyperparameters live in `config.py` as a single `HexZeroConfig` dataclass �
 | `games_per_iteration` | 100 | Self-play games before each training round |
 | `arena_win_threshold` | 0.55 | Candidate win rate needed to replace champion |
 | `loss_plateau_threshold` | 0.03 | Relative policy-loss improvement below which the agent is considered to have plateaued on the current board size |
-| `min_iters_per_size` | 5 | Minimum iterations on current size before promotion |
+| `min_iters_per_size` | 5 | Minimum iterations on current size before curriculum advance |
+| `max_iters_per_size` | 20 | Hard cap: advance curriculum even without a loss plateau |
 | `lr_cosine_steps` | 1 000 | Gradient steps for one cosine LR cycle |
 | `lr_min` | 1e-4 | LR floor; schedule resets to `learning_rate` on curriculum advance |
 | `use_pie_rule` | True | Enable swap rule (disable for very early training) |
-| `num_self_play_workers` | cpu\_count/2 | Worker threads sharing the InferenceServer |
+| `num_self_play_workers` | cpu\_count | Worker threads sharing the InferenceServer |
 
 ---
 
