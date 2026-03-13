@@ -47,25 +47,25 @@ def _biased_infer(state: HexState, preferred: tuple[int, int]):
 class ExpandTests(unittest.TestCase):
     def test_expand_creates_children_for_all_legal_moves(self):
         s = HexState(3)
-        node = Node(s)
+        node = Node()
         agent = MCTSAgent(infer_fn=_uniform_infer)
-        agent._expand(node)
+        agent._expand(node, s)
         self.assertTrue(node.is_expanded)
         self.assertEqual(len(node.children), 9)
 
     def test_priors_sum_to_one(self):
         s = HexState(3)
-        node = Node(s)
+        node = Node()
         agent = MCTSAgent(infer_fn=_uniform_infer)
-        agent._expand(node)
+        agent._expand(node, s)
         total = sum(c.prior for c in node.children.values())
         self.assertAlmostEqual(total, 1.0, places=5)
 
     def test_uniform_priors_when_all_legal(self):
         s = HexState(3)
-        node = Node(s)
+        node = Node()
         agent = MCTSAgent(infer_fn=_uniform_infer)
-        agent._expand(node)
+        agent._expand(node, s)
         expected = 1.0 / 9
         for child in node.children.values():
             self.assertAlmostEqual(child.prior, expected, places=5)
@@ -81,9 +81,9 @@ class ExpandTests(unittest.TestCase):
             return policy, 0.0
 
         s = HexState(3, pie_rule=True)  # move 0 — swap NOT legal
-        node = Node(s)
+        node = Node()
         agent = MCTSAgent(infer_fn=swap_heavy_infer)
-        agent._expand(node)
+        agent._expand(node, s)
         # All legal children should have equal uniform fallback (sum=0 after
         # filtering swap) and sum to 1
         total = sum(c.prior for c in node.children.values())
@@ -93,9 +93,9 @@ class ExpandTests(unittest.TestCase):
     def test_swap_child_created_when_legal(self):
         s = HexState(3, pie_rule=True)
         s.apply_move((1, 1))           # after one move, swap is legal
-        node = Node(s)
+        node = Node()
         agent = MCTSAgent(infer_fn=_uniform_infer)
-        agent._expand(node)
+        agent._expand(node, s)
         self.assertIn(SWAP_MOVE, node.children)
 
     def test_expand_returns_network_value(self):
@@ -105,16 +105,16 @@ class ExpandTests(unittest.TestCase):
             return policy, 0.75
 
         s = HexState(3)
-        node = Node(s)
+        node = Node()
         agent = MCTSAgent(infer_fn=value_one_infer)
-        val = agent._expand(node)
+        val = agent._expand(node, s)
         self.assertAlmostEqual(val, 0.75)
 
     def test_expand_on_empty_board_no_crash(self):
         s = HexState(2)
-        node = Node(s)
+        node = Node()
         agent = MCTSAgent(infer_fn=_uniform_infer)
-        agent._expand(node)
+        agent._expand(node, s)
         self.assertEqual(len(node.children), 4)
 
     def test_prior_renorm_with_biased_network(self):
@@ -123,8 +123,8 @@ class ExpandTests(unittest.TestCase):
         s = HexState(3)
         preferred = (0, 0)
         agent = MCTSAgent(infer_fn=lambda st: _biased_infer(st, preferred))
-        node = Node(s)
-        agent._expand(node)
+        node = Node()
+        agent._expand(node, s)
         total = sum(c.prior for c in node.children.values())
         self.assertAlmostEqual(total, 1.0, places=5)
         # The preferred cell should be the largest prior
@@ -192,16 +192,30 @@ class RootReuseTests(unittest.TestCase):
         agent.search(s2, add_noise=False)
         self.assertIsNot(agent._root, old_root)
 
-    def test_stale_root_discarded_on_player_mismatch(self):
+    def test_stale_root_discarded_on_move_count_mismatch(self):
+        """Root is keyed by move_count; a state with a different move_count
+        must create a new root even if the same agent instance is reused."""
         s = HexState(3)
         agent = MCTSAgent(infer_fn=_uniform_infer, simulations=5)
         agent.search(s, add_noise=False)
         old_root = agent._root
 
-        s2 = s.clone()
-        s2.current_player = WHITE  # same board but wrong player
+        # Advance move_count without going through update_root
+        s2 = HexState(3)
+        s2.apply_move((0, 0))   # move_count = 1 != 0
         agent.search(s2, add_noise=False)
         self.assertIsNot(agent._root, old_root)
+
+    def test_same_move_count_reuses_root(self):
+        """Same move_count → same root object (tree reuse)."""
+        s = HexState(3)
+        agent = MCTSAgent(infer_fn=_uniform_infer, simulations=5)
+        agent.search(s, add_noise=False)
+        old_root = agent._root
+
+        s2 = s.clone()  # same move_count = 0
+        agent.search(s2, add_noise=False)
+        self.assertIs(agent._root, old_root)
 
 
 # ---------------------------------------------------------------------------
@@ -211,18 +225,18 @@ class RootReuseTests(unittest.TestCase):
 class DirichletNoiseTests(unittest.TestCase):
     def test_priors_still_sum_to_one_after_noise(self):
         s = HexState(3)
-        node = Node(s)
+        node = Node()
         agent = MCTSAgent(infer_fn=_uniform_infer)
-        agent._expand(node)
+        agent._expand(node, s)
         agent._add_dirichlet_noise(node)
         total = sum(c.prior for c in node.children.values())
         self.assertAlmostEqual(total, 1.0, places=4)
 
     def test_noise_changes_priors(self):
         s = HexState(3)
-        node = Node(s)
+        node = Node()
         agent = MCTSAgent(infer_fn=_uniform_infer, dirichlet_epsilon=1.0)
-        agent._expand(node)
+        agent._expand(node, s)
         priors_before = {m: c.prior for m, c in node.children.items()}
         agent._add_dirichlet_noise(node)
         priors_after = {m: c.prior for m, c in node.children.items()}
@@ -230,8 +244,7 @@ class DirichletNoiseTests(unittest.TestCase):
         self.assertNotEqual(priors_before, priors_after)
 
     def test_no_crash_on_no_children(self):
-        s = HexState(2)
-        node = Node(s)
+        node = Node()
         agent = MCTSAgent(infer_fn=_uniform_infer)
         # Not expanded — no children — should not crash
         agent._add_dirichlet_noise(node)
@@ -242,14 +255,14 @@ class DirichletNoiseTests(unittest.TestCase):
         np.random.seed(42)
         s = HexState(3, pie_rule=True)
         s.apply_move((1, 1))  # after one move, swap is legal (10 moves total: 9 cells + swap)
-        node = Node(s)
+        node = Node()
         agent = MCTSAgent(infer_fn=_uniform_infer, dirichlet_epsilon=1.0)
-        agent._expand(node)
+        agent._expand(node, s)
         swap_shares = []
         for _ in range(200):
             # Re-expand to reset priors
-            node2 = Node(s)
-            agent._expand(node2)
+            node2 = Node()
+            agent._expand(node2, s)
             agent._add_dirichlet_noise(node2)
             swap_shares.append(node2.children[SWAP_MOVE].prior)
 

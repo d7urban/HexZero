@@ -56,6 +56,8 @@ class InferenceServer:
         result: list = [None]
         self._q.put((features, size_norm, event, result))
         event.wait()
+        if isinstance(result[0], BaseException):
+            raise RuntimeError("InferenceServer evaluation failed") from result[0]
         return result[0]   # (np.ndarray policy, float value)
 
     def stop(self) -> None:
@@ -71,7 +73,14 @@ class InferenceServer:
         while not self._stop.is_set():
             batch = self._collect()
             if batch:
-                self._evaluate(batch)
+                try:
+                    self._evaluate(batch)
+                except Exception as exc:
+                    # Signal all waiting callers so they don't hang forever.
+                    for (_, _, event, result) in batch:
+                        result[0] = exc
+                        event.set()
+                    raise   # let the thread die with a traceback
 
     def _collect(self) -> list:
         """Collect up to max_batch requests, waiting at most _wait_s."""

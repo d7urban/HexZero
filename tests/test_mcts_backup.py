@@ -1,6 +1,6 @@
 import unittest
 
-from hexzero.game import BLACK, WHITE, HexState
+from hexzero.game import HexState
 from hexzero.mcts import MCTSAgent, Node
 
 
@@ -22,13 +22,8 @@ def _uniform_infer(state: HexState):
 class BackupSignInvariantTests(unittest.TestCase):
     def test_backup_stores_child_q_in_parent_player_frame(self):
         # Construct root -> A where A is WHITE-to-move and leaf value is +1 for WHITE.
-        root_state = HexState(size=2)
-        root_state.current_player = BLACK
-        root = Node(root_state)
-
-        a_state = root_state.clone()
-        a_state.current_player = WHITE
-        a_child = Node(a_state)
+        root = Node()
+        a_child = Node()
 
         agent = MCTSAgent(infer_fn=_uniform_infer)
         path = [(a_child, (0, 0))]
@@ -42,15 +37,11 @@ class BackupSignInvariantTests(unittest.TestCase):
         self.assertEqual(root.W, -1.0)
 
     def test_select_child_avoids_losing_move_for_root_player(self):
-        root_state = HexState(size=2)
-        root = Node(root_state)
+        root = Node()
         root.N = 2
 
-        good_state = root_state.clone()
-        bad_state = root_state.clone()
-
-        good_child = Node(good_state, prior=0.5)
-        bad_child = Node(bad_state, prior=0.5)
+        good_child = Node(prior=0.5)
+        bad_child = Node(prior=0.5)
 
         # Equal visits and priors; Q drives the choice.
         good_child.N, good_child.W = 1, 1.0   # good for root player

@@ -13,12 +13,13 @@ class HexZeroConfig:
     num_filters: int = 128
     value_fc_hidden: int = 256
 
-    # Input feature planes (2 color + 6 feature = 8 total)
+    # Input feature planes (2 color + 6 feature + 1 to-move = 9 total)
     # Planes: black_stones, white_stones,
     #         black_2bridge, white_2bridge,
     #         black_edge_dist, white_edge_dist,
-    #         black_components, white_components
-    num_input_planes: int = 8
+    #         black_components, white_components,
+    #         to_move (1=BLACK to move, 0=WHITE to move)
+    num_input_planes: int = 9
 
     # MCTS
     # Simulations scale with board area to keep visits-per-legal-move roughly
@@ -82,6 +83,9 @@ class HexZeroConfig:
     # mastery signal when MCTS simulations are low.
     loss_plateau_threshold: float = 0.03   # < 3% relative improvement = plateau
     min_iters_per_size: int = 5
+    # Hard cap: advance curriculum even without a loss plateau if we've spent
+    # this many iterations on the current size with no further improvement.
+    max_iters_per_size: int = 20
 
     # Pie rule (swap rule): after BLACK's first move WHITE may swap colours.
     # Disable for very early training runs before the net has learned to play.

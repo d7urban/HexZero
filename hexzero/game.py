@@ -66,6 +66,8 @@ class HexState:
         self.move_count = 0
         self.last_move: tuple[int, int] | None = None
         self._winner: int | None = None
+        # Pre-built list of all (r,c) cells; shrinks as moves are played.
+        self._empty: list = [(r, c) for r in range(size) for c in range(size)]
 
         # 4 virtual nodes: black_top, black_bottom, white_left, white_right
         n_cells = size * size
@@ -88,6 +90,7 @@ class HexState:
         s.move_count = self.move_count
         s.last_move = self.last_move
         s._winner = self._winner
+        s._empty = self._empty[:]
         s._black_top    = self._black_top
         s._black_bottom = self._black_bottom
         s._white_left   = self._white_left
@@ -101,8 +104,7 @@ class HexState:
     def legal_moves(self) -> list[tuple[int, int]]:
         if self._winner is not None:
             return []
-        rows, cols = np.where(self.board == EMPTY)
-        moves = list(zip(rows.tolist(), cols.tolist(), strict=True))
+        moves = self._empty[:]
         if self.pie_rule and self.move_count == 1:
             moves.append(SWAP_MOVE)
         return moves
@@ -125,6 +127,7 @@ class HexState:
         self.board[r, c] = player
         self.last_move = move
         self.move_count += 1
+        self._empty.remove(move)
 
         cell_id = self._cell(r, c)
         self._connect_neighbours(r, c, player, cell_id)
@@ -218,6 +221,8 @@ class HexState:
         s.current_player = self.current_player
         s.move_count = self.move_count
         s._winner = self._winner
+        # Re-derive empty cells from the rotated board (180° maps (r,c)→(n-1-r,n-1-c))
+        s._empty = [(n - 1 - r, n - 1 - c) for r, c in self._empty]
         if self.last_move is not None:
             r, c = self.last_move
             s.last_move = (n - 1 - r, n - 1 - c)

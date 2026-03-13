@@ -224,6 +224,14 @@ class TrainingWorker(QObject):
 
             iters_on_size += 1
             self.signals.curriculum_progress.emit(iters_on_size, cfg.min_iters_per_size)
+
+            # Champion promotion — independent of curriculum decision.
+            promoted = candidate_is_better(cw, chw, total, cfg.arena_win_threshold)
+            if promoted:
+                ckpt_io.promote_to_best(cand_path, cfg.checkpoint_dir)
+                self.signals.checkpoint_saved.emit(cand_path)
+                # best_path remains "best.pt" — stable, never pruned
+
             ckpt_io.save_training_state(cfg.checkpoint_dir, {
                 "iteration":    self._iteration,
                 "board_size":   board_size,
@@ -232,46 +240,50 @@ class TrainingWorker(QObject):
                 "size_losses":  size_losses,
             })
 
-            if candidate_is_better(cw, chw, total, cfg.arena_win_threshold):
-                ckpt_io.promote_to_best(cand_path, cfg.checkpoint_dir)
-                self.signals.checkpoint_saved.emit(cand_path)
-                # best_path remains "best.pt" — stable, never pruned
+            # Curriculum advancement — checked every iteration regardless of whether
+            # a new champion was just promoted.  Two ways to advance:
+            #   1. Loss plateau (normal case: network has learned all it can here).
+            #   2. max_iters_per_size exceeded (safety valve: network peaked and can't
+            #      beat the current champion, so we'd be stuck forever otherwise).
+            next_idx    = size_idx + 1
+            plateau     = _loss_plateau(size_losses, cfg.min_iters_per_size,
+                                        cfg.loss_plateau_threshold)
+            max_reached = iters_on_size >= cfg.max_iters_per_size
+            can_advance = (
+                iters_on_size >= cfg.min_iters_per_size
+                and next_idx < len(cfg.board_sizes)
+                and (plateau or max_reached)
+            )
 
-                next_idx = size_idx + 1
-                can_advance = (
-                    iters_on_size >= cfg.min_iters_per_size
-                    and _loss_plateau(size_losses, cfg.min_iters_per_size,
-                                      cfg.loss_plateau_threshold)
-                    and next_idx < len(cfg.board_sizes)
-                )
-                if can_advance:
-                    size_idx      = next_idx
-                    board_size    = cfg.board_sizes[size_idx]
-                    iters_on_size = 0
-                    size_losses   = []
-                    self._emit_plateau(size_losses)
-                    self.trainer.reset_lr()
-                    self.signals.board_size_advanced.emit(board_size)
-                    self.signals.status_message.emit(
-                        f"Iteration {self._iteration} — curriculum advanced to "
-                        f"{board_size}×{board_size}! ({cw}/{total})"
-                    )
-                else:
-                    iters_left = max(0, cfg.min_iters_per_size - iters_on_size)
-                    if iters_left > 0:
-                        suffix = f"  (need {iters_left} more iter(s) on {board_size}×{board_size})"
-                    elif next_idx >= len(cfg.board_sizes):
-                        suffix = "  (at largest board size)"
-                    else:
-                        suffix = "  (loss still converging)"
-                    self.signals.status_message.emit(
-                        f"Iteration {self._iteration} — new champion! "
-                        f"({cw}/{total}, {win_rate:.0%}){suffix}"
-                    )
-            else:
+            if can_advance:
+                size_idx      = next_idx
+                board_size    = cfg.board_sizes[size_idx]
+                iters_on_size = 0
+                size_losses   = []
+                self._emit_plateau(size_losses)
+                self.trainer.reset_lr()
+                self.signals.board_size_advanced.emit(board_size)
+                reason = "loss plateau" if plateau else f"max {cfg.max_iters_per_size} iters"
+                prefix = "new champion + " if promoted else ""
                 self.signals.status_message.emit(
-                    f"Iteration {self._iteration} — champion retained "
-                    f"({chw}/{total}, {win_rate:.0%} for candidate)"
+                    f"Iteration {self._iteration} — {prefix}curriculum advanced to "
+                    f"{board_size}×{board_size}! ({reason})"
+                )
+            else:
+                arena_str = (
+                    f"new champion! ({cw}/{total}, {win_rate:.0%})" if promoted
+                    else f"champion retained ({chw}/{total}, {win_rate:.0%} for candidate)"
+                )
+                if next_idx >= len(cfg.board_sizes):
+                    suffix = "  (at largest board size)"
+                elif iters_on_size < cfg.min_iters_per_size:
+                    iters_left = cfg.min_iters_per_size - iters_on_size
+                    suffix = f"  (need {iters_left} more iter(s) on {board_size}×{board_size})"
+                else:
+                    remaining = cfg.max_iters_per_size - iters_on_size
+                    suffix = f"  (loss converging, max in {remaining} iter(s))"
+                self.signals.status_message.emit(
+                    f"Iteration {self._iteration} — {arena_str}{suffix}"
                 )
 
             self.signals.iteration_finished.emit(self._iteration)

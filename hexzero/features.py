@@ -1,7 +1,7 @@
 """
 Feature plane construction for the neural network.
 
-Input tensor shape: (C, H, W) where C = num_input_planes (default 8).
+Input tensor shape: (C, H, W) where C = num_input_planes (default 9).
 
 Plane layout:
   0  black_stones        — 1 where BLACK stone, 0 elsewhere
@@ -12,11 +12,18 @@ Plane layout:
   5  white_edge_dist     — min BFS distance to either of WHITE's two target edges (normalised)
   6  black_components    — normalised connected-component label for BLACK stones
   7  white_components    — normalised connected-component label for WHITE stones
+  8  to_move             — 1 everywhere if BLACK to move, 0 everywhere if WHITE to move
+
+Plane 8 is essential for the value head: the value target is always from the
+current player's perspective (±1), but planes 0–7 are in absolute BLACK/WHITE
+coordinates.  Without plane 8, both players see the same features for equivalent
+board positions, causing the value target to average to 0 and the value head to
+be stuck predicting 0 for every position.
 
 All planes are float32 in [0, 1].
 
 Returns:
-    features  : np.ndarray shape (8, H, W) float32
+    features  : np.ndarray shape (9, H, W) float32
     size_norm : float  board size normalised to [0,1] for value head conditioning
                        using min=5 max=19
 """
@@ -216,6 +223,9 @@ def extract_features(state: HexState) -> tuple[np.ndarray, float]:
     black_cc = _component_plane(board, BLACK)
     white_cc = _component_plane(board, WHITE)
 
+    to_move = np.ones((size, size), dtype=np.float32) if state.current_player == BLACK \
+              else np.zeros((size, size), dtype=np.float32)
+
     features = np.stack([
         black_stones,
         white_stones,
@@ -225,7 +235,8 @@ def extract_features(state: HexState) -> tuple[np.ndarray, float]:
         white_ed,
         black_cc,
         white_cc,
-    ], axis=0)  # (8, size, size)
+        to_move,
+    ], axis=0)  # (9, size, size)
 
     size_norm = (size - _SIZE_MIN) / (_SIZE_MAX - _SIZE_MIN)
     size_norm = float(np.clip(size_norm, 0.0, 1.0))

@@ -11,13 +11,13 @@ class ShapeAndDtypeTests(unittest.TestCase):
     def test_output_shape(self):
         s = HexState(5)
         features, _size_norm = extract_features(s)
-        self.assertEqual(features.shape, (8, 5, 5))
+        self.assertEqual(features.shape, (9, 5, 5))
         self.assertEqual(features.dtype, np.float32)
 
     def test_output_shape_large(self):
         s = HexState(11)
         features, _ = extract_features(s)
-        self.assertEqual(features.shape, (8, 11, 11))
+        self.assertEqual(features.shape, (9, 11, 11))
 
     def test_all_planes_in_zero_one(self):
         s = HexState(5)
@@ -83,6 +83,28 @@ class PlaneSemanticTests(unittest.TestCase):
         # Planes 6 (black_cc) and 7 (white_cc) should be all-zero
         np.testing.assert_array_equal(features[6], np.zeros((5, 5)))
         np.testing.assert_array_equal(features[7], np.zeros((5, 5)))
+
+    def test_to_move_plane_black(self):
+        s = HexState(5)  # BLACK to move initially
+        features, _ = extract_features(s)
+        np.testing.assert_array_equal(features[8], np.ones((5, 5)))
+
+    def test_to_move_plane_white(self):
+        s = HexState(5)
+        s.apply_move((2, 2))  # now WHITE to move
+        features, _ = extract_features(s)
+        np.testing.assert_array_equal(features[8], np.zeros((5, 5)))
+
+    def test_to_move_plane_after_pie_swap(self):
+        # After SWAP_MOVE the original WHITE player (now playing BLACK's role)
+        # has swapped; current_player becomes WHITE, so to_move should be 0.
+        from hexzero.game import SWAP_MOVE
+        s = HexState(5, pie_rule=True)
+        s.apply_move((2, 2))   # BLACK places stone; current_player → WHITE
+        s.apply_move(SWAP_MOVE)  # WHITE swaps; current_player stays WHITE
+        self.assertEqual(s.current_player, -1)  # WHITE = -1
+        features, _ = extract_features(s)
+        np.testing.assert_array_equal(features[8], np.zeros((5, 5)))
 
     def test_component_plane_single_stone_equals_one(self):
         s = HexState(5)
