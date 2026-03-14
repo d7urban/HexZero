@@ -104,14 +104,14 @@ repeat:
   4. Train          — 200 AdamW gradient steps, dynamic batching by board size
   5. Arena          — candidate vs champion (40 games, alternating colours)
   6. Promote        — replace champion if candidate wins ≥ 55% of games
-  7. Curriculum     — advance board size if plateau or max-iters reached (see below)
+  7. Curriculum     — advance board size if no recent promotions or max-iters reached (see below)
 ```
 
 The replay buffer is saved to `checkpoints/replay_buffer.pt.gz` after each self-play phase and reloaded on restart, eliminating the cold-start penalty.
 
 ### Learning Rate Schedule
 
-AdamW with a cosine annealing schedule: LR decays from `learning_rate` (1e-3) to `lr_min` (1e-4) over `lr_cosine_steps` (1 000) gradient steps, then holds at the floor. The schedule resets to `learning_rate` at each curriculum advance so the network can adapt quickly to the larger board without starting from the decayed floor.
+AdamW with a cosine annealing schedule: LR decays from `learning_rate` (5e-4) to `lr_min` (5e-5) over `lr_cosine_steps` (3 000) gradient steps, then holds at the floor. The schedule resets to `learning_rate` at each curriculum advance so the network can adapt quickly to the larger board without starting from the decayed floor.
 
 Self-play data is non-stationary (the policy distribution shifts as the network improves), which argues against aggressive step-decay schedules. The cosine envelope provides a gentle, smooth decay that is robust to this non-stationarity.
 
@@ -119,14 +119,12 @@ Self-play data is non-stationary (the policy distribution shifts as the network 
 
 Training starts on 7×7 and advances through `board_sizes` (default `[7, 9, 11]`). Advancement is checked every iteration and triggers when **both**:
 
-1. At least `min_iters_per_size` (default 5) iterations completed on the current size.
+1. At least `min_iters_per_size` (default 10) iterations completed on the current size.
 2. **Either** of:
-   - **Loss plateau**: relative improvement in mean policy loss over the last `min_iters_per_size` iterations is below `loss_plateau_threshold` (default 3%).
-   - **Hard cap**: `max_iters_per_size` (default 20) iterations reached — safety valve so training never stalls permanently if the network peaks without triggering a plateau.
+   - **No recent promotions**: the candidate has not beaten the champion in any of the last `min_iters_per_size` iterations — the direct signal that the model has saturated the current board size.
+   - **Hard cap**: `max_iters_per_size` (default 35) iterations reached — safety valve so training never stalls permanently.
 
-Curriculum advancement is independent of the arena result. The champion is promoted or retained each iteration; the curriculum is evaluated separately. This prevents a deadlock where the network has plateaued but can no longer beat the current champion.
-
-The arena win rate is used only to decide whether to promote the candidate checkpoint to champion — it is not used as a curriculum signal.
+Arena promotion is the direct model-selection criterion in this project, so it is also the curriculum signal. A run of failed promotions is the clearest evidence that the model can no longer improve on the current board size. This also handles the case where policy loss is rising or accuracy is falling (e.g. early in training on a new size) — as long as the candidate keeps beating the champion, training continues regardless of loss trends.
 
 The live demo board follows the curriculum immediately when the size advances, abandoning the current game mid-play. Knowledge transfers because the convolutional weights are size-agnostic. Board size and per-size iteration count are persisted in `checkpoints/training_state.json` so the curriculum ladder is restored correctly on restart.
 
@@ -138,6 +136,7 @@ The live demo board follows the curriculum immediately when the size advances, a
 HexZero/
 ├── main.py                  — entry point (GUI + headless modes)
 ├── play.py                  — human vs best checkpoint (interactive)
+├── tournament.py            — Swiss tournament with Glicko-2 ratings across checkpoint dirs
 ├── config.py                — HexZeroConfig dataclass (all hyperparameters)
 ├── requirements.txt
 └── hexzero/
@@ -216,14 +215,48 @@ python main.py --headless --board-size 11 --workers 8 --simulations 400
 python main.py --headless --checkpoint checkpoints/best.pt
 ```
 
+### Parallel experiments
+
+Each run needs its own checkpoint directory so the two instances don't overwrite each other's `best.pt`, replay buffer, and training state:
+
+```bash
+# First run (existing)
+python main.py
+
+# Second run, fully independent
+python main.py --checkpoint-dir checkpoints2
+
+# Headless parallel runs
+python main.py --headless --checkpoint-dir run_a
+python main.py --headless --checkpoint-dir run_b --workers 4
+```
+
+### Tournament
+
+Compare models from different checkpoint directories using a Swiss tournament with Glicko-2 ratings. Each round pairs models with similar standings; pairings within a round run in parallel. Final ranking is by Glicko-2 rating.
+
+```bash
+python tournament.py checkpoints/ checkpoints2/ checkpoints3/
+python tournament.py checkpoints/ checkpoints2/ --rounds 7 --games 20 --sims 400
+python tournament.py checkpoints/ checkpoints2/ --board-size 11
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--rounds N` | ceil(log₂(N))+2 | Swiss rounds |
+| `--games N` | 10 | Games per match per round (should be even) |
+| `--sims N` | from config | MCTS simulations per move |
+| `--board-size N` | smallest detected | Board size override |
+
 ### CLI options
 
 | Flag | Default | Description |
 |---|---|---|
 | `--headless` | off | Run without GUI |
 | `--board-size N` | 7 | Initial board size |
-| `--checkpoint PATH` | auto | Resume from checkpoint |
-| `--simulations N` | 50 | MCTS simulations per move |
+| `--checkpoint PATH` | auto | Resume from specific checkpoint file |
+| `--checkpoint-dir PATH` | `checkpoints` | Checkpoint directory; use different dirs for parallel runs |
+| `--simulations N` | 50 | MCTS simulations for 7×7; larger boards scale proportionally |
 | `--workers N` | cpu\_count | Self-play worker threads |
 
 ---
@@ -237,13 +270,13 @@ All hyperparameters live in `config.py` as a single `HexZeroConfig` dataclass �
 | `num_res_blocks` | 8 | Tower depth |
 | `num_filters` | 128 | Network width |
 | `mcts_simulations` | 50 | Quality vs speed; 50 is fast, 400+ is strong |
+| `mcts_simulations_per_size` | `[75, 120, 180]` | Per-size sim counts scaled as 1.5 × side², rounded: 7→75, 9→120, 11→180 |
 | `games_per_iteration` | 100 | Self-play games before each training round |
 | `arena_win_threshold` | 0.55 | Candidate win rate needed to replace champion |
-| `loss_plateau_threshold` | 0.03 | Relative policy-loss improvement below which the agent is considered to have plateaued on the current board size |
-| `min_iters_per_size` | 5 | Minimum iterations on current size before curriculum advance |
-| `max_iters_per_size` | 20 | Hard cap: advance curriculum even without a loss plateau |
-| `lr_cosine_steps` | 1 000 | Gradient steps for one cosine LR cycle |
-| `lr_min` | 1e-4 | LR floor; schedule resets to `learning_rate` on curriculum advance |
+| `min_iters_per_size` | 10 | Minimum iterations on current size before curriculum advance |
+| `max_iters_per_size` | 35 | Hard cap: advance curriculum even without a promotion drought |
+| `lr_cosine_steps` | 3 000 | Gradient steps for one cosine LR cycle |
+| `lr_min` | 5e-5 | LR floor; schedule resets to `learning_rate` on curriculum advance |
 | `use_pie_rule` | True | Enable swap rule (disable for very early training) |
 | `num_self_play_workers` | cpu\_count | Worker threads sharing the InferenceServer |
 

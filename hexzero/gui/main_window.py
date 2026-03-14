@@ -50,23 +50,6 @@ from hexzero.net import build_net
 from hexzero.trainer import Trainer
 
 
-def _loss_plateau(losses: list[float], window: int, threshold: float) -> bool:
-    """Return True when policy loss has stopped improving significantly.
-
-    Compares the first and last value of the most recent `window` per-iteration
-    losses.  If the relative improvement is below `threshold` the network has
-    plateaued on the current board size.
-    """
-    if len(losses) < window:
-        return False
-    recent = losses[-window:]
-    start  = recent[0]
-    if start <= 0:
-        return True
-    improvement = (start - recent[-1]) / start
-    return 0.0 <= improvement < threshold
-
-
 # ---------------------------------------------------------------------------
 # Training worker thread
 # ---------------------------------------------------------------------------
@@ -85,17 +68,11 @@ class TrainingWorker(QObject):
     def stop(self) -> None:
         self._stop_event.set()
 
-    def _emit_plateau(self, size_losses: list) -> None:
-        cfg     = self.cfg
-        window  = cfg.min_iters_per_size
-        has_data = len(size_losses) >= window
-        if has_data:
-            recent = size_losses[-window:]
-            start  = recent[0]
-            impr   = max(0.0, (start - recent[-1]) / start * 100) if start > 0 else 0.0
-        else:
-            impr = 0.0
-        self.signals.plateau_updated.emit(impr, cfg.loss_plateau_threshold * 100, has_data)
+    def _emit_promotion_freq(self, recent_promotions: list) -> None:
+        window   = self.cfg.min_iters_per_size
+        has_data = len(recent_promotions) >= window
+        count    = sum(recent_promotions) if has_data else 0
+        self.signals.promotion_freq_updated.emit(count, window, has_data)
 
     @pyqtSlot()
     def run(self) -> None:
@@ -137,9 +114,9 @@ class TrainingWorker(QObject):
         if ts.get("board_size") and ts["board_size"] in cfg.board_sizes:
             board_size = ts["board_size"]
             size_idx   = cfg.board_sizes.index(board_size)
-        iters_on_size = ts.get("iters_on_size", 0)
-        size_losses: list[float] = ts.get("size_losses", [])
-        self._emit_plateau(size_losses)
+        iters_on_size     = ts.get("iters_on_size", 0)
+        recent_promotions: list[bool] = ts.get("recent_promotions", [])
+        self._emit_promotion_freq(recent_promotions)
 
         stop = self._stop_event
         while not stop.is_set():
@@ -185,13 +162,6 @@ class TrainingWorker(QObject):
                 f"Iteration {self._iteration} — training…"
             )
             metrics_list = self.trainer.train_iteration(self._iteration, board_size)
-            if metrics_list:
-                mean_loss = sum(m["policy_loss"] for m in metrics_list) / len(metrics_list)
-                size_losses.append(mean_loss)
-                # Keep only the last window we actually need; prevents unbounded growth
-                # at the final board size where size_losses is never reset.
-                size_losses = size_losses[-cfg.min_iters_per_size:]
-                self._emit_plateau(size_losses)
 
             if stop.is_set():
                 break
@@ -232,38 +202,41 @@ class TrainingWorker(QObject):
                 self.signals.checkpoint_saved.emit(cand_path)
                 # best_path remains "best.pt" — stable, never pruned
 
+            recent_promotions.append(promoted)
+            recent_promotions = recent_promotions[-cfg.min_iters_per_size:]
+            self._emit_promotion_freq(recent_promotions)
+
             ckpt_io.save_training_state(cfg.checkpoint_dir, {
-                "iteration":    self._iteration,
-                "board_size":   board_size,
-                "size_idx":     size_idx,
-                "iters_on_size": iters_on_size,
-                "size_losses":  size_losses,
+                "iteration":         self._iteration,
+                "board_size":        board_size,
+                "size_idx":          size_idx,
+                "iters_on_size":     iters_on_size,
+                "recent_promotions": recent_promotions,
             })
 
             # Curriculum advancement — checked every iteration regardless of whether
             # a new champion was just promoted.  Two ways to advance:
-            #   1. Loss plateau (normal case: network has learned all it can here).
-            #   2. max_iters_per_size exceeded (safety valve: network peaked and can't
-            #      beat the current champion, so we'd be stuck forever otherwise).
+            #   1. No recent promotions (normal: candidate can no longer beat champion).
+            #   2. max_iters_per_size exceeded (safety valve).
             next_idx    = size_idx + 1
-            plateau     = _loss_plateau(size_losses, cfg.min_iters_per_size,
-                                        cfg.loss_plateau_threshold)
+            no_promos   = (iters_on_size >= cfg.min_iters_per_size
+                           and not any(recent_promotions))
             max_reached = iters_on_size >= cfg.max_iters_per_size
             can_advance = (
                 iters_on_size >= cfg.min_iters_per_size
                 and next_idx < len(cfg.board_sizes)
-                and (plateau or max_reached)
+                and (no_promos or max_reached)
             )
 
             if can_advance:
-                size_idx      = next_idx
-                board_size    = cfg.board_sizes[size_idx]
-                iters_on_size = 0
-                size_losses   = []
-                self._emit_plateau(size_losses)
+                size_idx          = next_idx
+                board_size        = cfg.board_sizes[size_idx]
+                iters_on_size     = 0
+                recent_promotions = []
+                self._emit_promotion_freq(recent_promotions)
                 self.trainer.reset_lr()
                 self.signals.board_size_advanced.emit(board_size)
-                reason = "loss plateau" if plateau else f"max {cfg.max_iters_per_size} iters"
+                reason = "no recent promotions" if no_promos else f"max {cfg.max_iters_per_size} iters"
                 prefix = "new champion + " if promoted else ""
                 self.signals.status_message.emit(
                     f"Iteration {self._iteration} — {prefix}curriculum advanced to "
@@ -280,8 +253,8 @@ class TrainingWorker(QObject):
                     iters_left = cfg.min_iters_per_size - iters_on_size
                     suffix = f"  (need {iters_left} more iter(s) on {board_size}×{board_size})"
                 else:
-                    remaining = cfg.max_iters_per_size - iters_on_size
-                    suffix = f"  (loss converging, max in {remaining} iter(s))"
+                    promos = sum(recent_promotions)
+                    suffix = f"  (promos {promos}/{len(recent_promotions)}, max in {cfg.max_iters_per_size - iters_on_size} iter(s))"
                 self.signals.status_message.emit(
                     f"Iteration {self._iteration} — {arena_str}{suffix}"
                 )
@@ -434,14 +407,14 @@ class MainWindow(QMainWindow):
         toolbar.addSeparator()
         toolbar.addWidget(QLabel("  Training sims: "))
         self._sims_spin = QSpinBox()
-        self._sims_spin.setRange(10, 2000)
+        self._sims_spin.setRange(10, 100_000)
         self._sims_spin.setValue(self.cfg.mcts_simulations_per_size[0]
                                   if self.cfg.mcts_simulations_per_size
                                   else self.cfg.mcts_simulations)
         self._sims_spin.setSingleStep(50)
         self._sims_spin.setToolTip(
-            "MCTS simulations per move for the smallest board size.\n"
-            "Larger board sizes scale up proportionally (see mcts_simulations_per_size).\n"
+            "MCTS simulations per move for the current board size.\n"
+            "Changing this value scales all board sizes proportionally.\n"
             "The live board demo always uses 50 sims for display speed."
         )
         toolbar.addWidget(self._sims_spin)
@@ -486,7 +459,7 @@ class MainWindow(QMainWindow):
         sig.board_size_advanced.connect(self._stats.on_board_size_advanced)
         sig.curriculum_progress.connect(self._stats.on_curriculum_progress)
         sig.swap_rate_updated.connect(self._stats.on_swap_rate_updated)
-        sig.plateau_updated.connect(self._stats.on_plateau_updated)
+        sig.promotion_freq_updated.connect(self._stats.on_promotion_freq_updated)
 
     # ------------------------------------------------------------------
     # Slots
@@ -597,13 +570,18 @@ class MainWindow(QMainWindow):
     @pyqtSlot(int)
     def _on_sims_changed(self, value: int) -> None:
         self.cfg.mcts_simulations = value
-        # Scale all per-size entries proportionally so relative ratios are preserved.
+        # Scale all per-size entries proportionally so relative ratios are preserved,
+        # using the current board size's entry as the scaling anchor.
         per_size = self.cfg.mcts_simulations_per_size
-        base = per_size[0] if per_size else value
-        if base > 0 and per_size:
-            self.cfg.mcts_simulations_per_size = [
-                max(1, round(s * value / base)) for s in per_size
-            ]
+        if per_size:
+            cur_size = self._size_combo.currentData()
+            cur_idx  = (self.cfg.board_sizes.index(cur_size)
+                        if cur_size in self.cfg.board_sizes else 0)
+            base = per_size[cur_idx] if cur_idx < len(per_size) else per_size[-1]
+            if base > 0:
+                self.cfg.mcts_simulations_per_size = [
+                    max(1, round(s * value / base)) for s in per_size
+                ]
 
     # ------------------------------------------------------------------
     # Close

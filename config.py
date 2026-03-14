@@ -26,7 +26,8 @@ class HexZeroConfig:
     # constant.  mcts_simulations_per_size is indexed in parallel with board_sizes;
     # if a size has no entry the last value is used as a fallback.
     mcts_simulations: int = 50   # used directly when pie_rule is off / for arena
-    mcts_simulations_per_size: list[int] = field(default_factory=lambda: [50, 100, 150])
+    # Scaled as 1.5 × side², rounded to a nice number:  [7→75, 9→120, 11→180]
+    mcts_simulations_per_size: list[int] = field(default_factory=lambda: [75, 120, 180])
     cpuct: float = 1.25
     dirichlet_alpha: float = 0.3
     dirichlet_epsilon: float = 0.25
@@ -48,14 +49,14 @@ class HexZeroConfig:
 
     # Training
     batch_size: int = 256
-    learning_rate: float = 1e-3
+    learning_rate: float = 5e-4
     # Cosine LR schedule: decays from learning_rate to lr_min over lr_cosine_steps
     # gradient steps, then holds at lr_min until the next curriculum advance, at
     # which point it resets to learning_rate so the network can adapt quickly to
     # the new board size.  Default = min_iters_per_size * train_steps_per_iteration
     # so the LR reaches its floor right around when promotion first becomes possible.
-    lr_cosine_steps: int = 1_000   # = 5 iters × 200 steps
-    lr_min: float = 1e-4
+    lr_cosine_steps: int = 3_000   # = 15 iters × 200 steps
+    lr_min: float = 5e-5
     weight_decay: float = 1e-4
     value_loss_weight: float = 1.0
     train_steps_per_iteration: int = 200
@@ -77,15 +78,14 @@ class HexZeroConfig:
 
     # Curriculum: advance to the next board size when BOTH conditions hold:
     #   1. At least min_iters_per_size iterations completed on the current size.
-    #   2. Policy loss has plateaued: relative improvement over the last
-    #      min_iters_per_size iterations is below loss_plateau_threshold.
-    # This avoids the binary 0%/100% arena win-rate which is not a meaningful
-    # mastery signal when MCTS simulations are low.
-    loss_plateau_threshold: float = 0.03   # < 3% relative improvement = plateau
-    min_iters_per_size: int = 5
+    #   2. No arena promotion in the last min_iters_per_size iterations.
+    # Arena promotion is the direct model-selection criterion, so its absence
+    # is the cleanest saturation signal: if the candidate can no longer beat
+    # the champion, the model has learned all it can at this board size.
+    min_iters_per_size: int = 10
     # Hard cap: advance curriculum even without a loss plateau if we've spent
     # this many iterations on the current size with no further improvement.
-    max_iters_per_size: int = 20
+    max_iters_per_size: int = 35
 
     # Pie rule (swap rule): after BLACK's first move WHITE may swap colours.
     # Disable for very early training runs before the net has learned to play.

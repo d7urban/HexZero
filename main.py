@@ -2,10 +2,11 @@
 HexZero — AlphaZero-style self-play training for Hex.
 
 Usage:
-    python main.py                    # Launch GUI
-    python main.py --headless         # Run training without GUI
-    python main.py --board-size 9     # Override initial board size
-    python main.py --checkpoint path  # Resume from checkpoint
+    python main.py                                   # Launch GUI
+    python main.py --headless                        # Run training without GUI
+    python main.py --board-size 9                    # Override initial board size
+    python main.py --checkpoint path                 # Resume from checkpoint
+    python main.py --checkpoint-dir checkpoints2     # Parallel experiment with separate state
 """
 
 import argparse
@@ -17,23 +18,15 @@ from config import HexZeroConfig
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="HexZero training suite")
-    p.add_argument("--headless",    action="store_true",  help="Run without GUI")
-    p.add_argument("--board-size",  type=int, default=None, help="Initial board size")
-    p.add_argument("--checkpoint",  type=str, default=None, help="Path to checkpoint to load")
-    p.add_argument("--simulations", type=int, default=None, help="MCTS simulations per move")
-    p.add_argument("--workers",     type=int, default=None, help="Self-play worker processes")
+    p.add_argument("--headless",        action="store_true",  help="Run without GUI")
+    p.add_argument("--board-size",      type=int, default=None, help="Initial board size")
+    p.add_argument("--checkpoint",      type=str, default=None, help="Path to checkpoint to load")
+    p.add_argument("--checkpoint-dir",  type=str, default=None,
+                   help="Checkpoint directory (default: checkpoints). Use a different dir to run parallel experiments.")
+    p.add_argument("--simulations",     type=int, default=None,
+                   help="MCTS simulations for 7×7 (default: 50); larger boards scale proportionally")
+    p.add_argument("--workers",         type=int, default=None, help="Self-play worker threads")
     return p.parse_args()
-
-
-def _loss_plateau(losses: list[float], window: int, threshold: float) -> bool:
-    """Return True when loss improvement over `window` iters drops below `threshold`."""
-    if len(losses) < window:
-        return False
-    recent = losses[-window:]
-    start  = recent[0]
-    if start <= 0:
-        return True
-    return (start - recent[-1]) / start < threshold
 
 
 def run_headless(cfg: HexZeroConfig, resume_path: str = None) -> None:
@@ -63,9 +56,10 @@ def run_headless(cfg: HexZeroConfig, resume_path: str = None) -> None:
         print("No checkpoint found — saving initial weights…")
         best_path = trainer.save_checkpoint(0, board_size)
         ckpt_io.promote_to_best(best_path, cfg.checkpoint_dir)
-        iteration     = 0
-        iters_on_size = 0
-        size_losses: list[float] = []
+        size_idx           = cfg.board_sizes.index(board_size) if board_size in cfg.board_sizes else 0
+        iteration          = 0
+        iters_on_size      = 0
+        recent_promotions: list[bool] = []
     else:
         trainer.load_checkpoint(best_path)
         # Load once and reuse for board_size; avoids a second torch.load call.
@@ -77,15 +71,19 @@ def run_headless(cfg: HexZeroConfig, resume_path: str = None) -> None:
         if resume_path:
             # Explicit --checkpoint: the JSON may belong to a different run;
             # trust the checkpoint's own counter and reset curriculum state.
-            iteration     = ckpt_data.get("iteration", 0)
-            iters_on_size = 0
-            size_losses   = []
+            size_idx      = cfg.board_sizes.index(board_size) if board_size in cfg.board_sizes else 0
+            iteration          = ckpt_data.get("iteration", 0)
+            iters_on_size      = 0
+            recent_promotions  = []
         else:
             # Normal resume: JSON is consistent with best.pt (both updated
             # together at the end of each accepted iteration).
-            iteration     = ts.get("iteration", 0)
-            iters_on_size = ts.get("iters_on_size", 0)
-            size_losses   = ts.get("size_losses", [])
+            size_idx          = ts.get("size_idx",
+                                       cfg.board_sizes.index(board_size)
+                                       if board_size in cfg.board_sizes else 0)
+            iteration         = ts.get("iteration", 0)
+            iters_on_size     = ts.get("iters_on_size", 0)
+            recent_promotions = ts.get("recent_promotions", [])
 
         print(f"Resumed from {best_path}  (board {board_size}×{board_size}  iter {iteration})")
 
@@ -115,12 +113,7 @@ def run_headless(cfg: HexZeroConfig, resume_path: str = None) -> None:
             metrics_list = trainer.train_iteration(iteration, board_size)
             if metrics_list:
                 last = metrics_list[-1]
-                mean_loss = sum(m["policy_loss"] for m in metrics_list) / len(metrics_list)
-                size_losses.append(mean_loss)
-                plateau = _loss_plateau(
-                    size_losses, cfg.min_iters_per_size, cfg.loss_plateau_threshold)
-                print(f" loss={last['loss']:.4f}  policy_acc={last['policy_acc']:.3f}"
-                      f"  plateau={plateau}")
+                print(f" loss={last['loss']:.4f}  policy_acc={last['policy_acc']:.3f}")
 
             cand_path = trainer.save_checkpoint(iteration, board_size)
 
@@ -130,31 +123,47 @@ def run_headless(cfg: HexZeroConfig, resume_path: str = None) -> None:
             print(f" candidate {cw}/{total}  champion {chw}/{total}")
 
             iters_on_size += 1
-            if candidate_is_better(cw, chw, total, cfg.arena_win_threshold):
+
+            # Champion promotion — independent of curriculum decision.
+            promoted = candidate_is_better(cw, chw, total, cfg.arena_win_threshold)
+            if promoted:
                 best_path = cand_path
                 ckpt_io.promote_to_best(best_path, cfg.checkpoint_dir)
                 print("  → New champion accepted.")
-                size_idx  = cfg.board_sizes.index(board_size)
-                next_idx  = size_idx + 1
-                if (_loss_plateau(size_losses, cfg.min_iters_per_size,
-                                  cfg.loss_plateau_threshold)
-                        and iters_on_size >= cfg.min_iters_per_size
-                        and next_idx < len(cfg.board_sizes)):
-                    board_size    = cfg.board_sizes[next_idx]
-                    iters_on_size = 0
-                    size_losses   = []
-                    trainer.reset_lr()
-                    print(f"  → Curriculum advanced to {board_size}×{board_size}!")
             else:
                 print("  → Champion retained.")
 
+            recent_promotions.append(promoted)
+            recent_promotions = recent_promotions[-cfg.min_iters_per_size:]
+
             ckpt_io.save_training_state(cfg.checkpoint_dir, {
-                "iteration":    iteration,
-                "board_size":   board_size,
-                "size_idx":     cfg.board_sizes.index(board_size),
-                "iters_on_size": iters_on_size,
-                "size_losses":  size_losses,
+                "iteration":          iteration,
+                "board_size":         board_size,
+                "size_idx":           size_idx,
+                "iters_on_size":      iters_on_size,
+                "recent_promotions":  recent_promotions,
             })
+
+            # Curriculum advancement — checked every iteration regardless of promotion.
+            # Two triggers: no recent promotions (normal) or max_iters_per_size (safety valve).
+            next_idx    = size_idx + 1
+            no_promos   = (iters_on_size >= cfg.min_iters_per_size
+                           and not any(recent_promotions))
+            max_reached = iters_on_size >= cfg.max_iters_per_size
+            can_advance = (
+                iters_on_size >= cfg.min_iters_per_size
+                and next_idx < len(cfg.board_sizes)
+                and (no_promos or max_reached)
+            )
+            if can_advance:
+                size_idx          = next_idx
+                board_size        = cfg.board_sizes[size_idx]
+                iters_on_size     = 0
+                recent_promotions = []
+                trainer.reset_lr()
+                reason = "no recent promotions" if no_promos else f"max {cfg.max_iters_per_size} iters"
+                prefix = "new champion + " if promoted else ""
+                print(f"  → {prefix}Curriculum advanced to {board_size}×{board_size}! ({reason})")
 
     except KeyboardInterrupt:
         print("\nTraining interrupted. Checkpoint saved at:", best_path)
@@ -203,8 +212,17 @@ def main() -> None:
 
     if args.board_size is not None:
         cfg.initial_board_size = args.board_size
+    if args.checkpoint_dir is not None:
+        cfg.checkpoint_dir = args.checkpoint_dir
     if args.simulations is not None:
         cfg.mcts_simulations = args.simulations
+        # Scale all per-size entries proportionally from the 7×7 base.
+        base = cfg.mcts_simulations_per_size[0] if cfg.mcts_simulations_per_size else 50
+        if base > 0 and cfg.mcts_simulations_per_size:
+            cfg.mcts_simulations_per_size = [
+                max(1, round(s * args.simulations / base))
+                for s in cfg.mcts_simulations_per_size
+            ]
     if args.workers is not None:
         cfg.num_self_play_workers = args.workers
 

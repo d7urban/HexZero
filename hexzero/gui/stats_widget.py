@@ -195,8 +195,8 @@ class StatsWidget(QWidget):
             self._swap_lbl = None
 
         layout.addWidget(_sep())
-        self._plateau_lbl = _label("Plateau  —")
-        layout.addWidget(self._plateau_lbl)
+        self._promo_lbl = _label("Promos  —")
+        layout.addWidget(self._promo_lbl)
 
         layout.addStretch()
 
@@ -258,17 +258,16 @@ class StatsWidget(QWidget):
         pct = int(100 * swaps / total)
         self._swap_lbl.setText(f"Swap  {swaps}/{total} ({pct}%)")
 
-    @pyqtSlot(float, float, bool)
-    def on_plateau_updated(self, improvement_pct: float, threshold_pct: float,
-                           has_data: bool) -> None:
+    @pyqtSlot(int, int, bool)
+    def on_promotion_freq_updated(self, count: int, window: int, has_data: bool) -> None:
         if not has_data:
-            self._plateau_lbl.setText("Plateau  —")
-            self._plateau_lbl.setStyleSheet("")
+            self._promo_lbl.setText("Promos  —")
+            self._promo_lbl.setStyleSheet("")
         else:
-            self._plateau_lbl.setText(f"Plateau  {improvement_pct:.1f}%")
-            # Green when improvement is below threshold (plateaued = ready to advance)
-            colour = "#6acc6a" if improvement_pct < threshold_pct else ""
-            self._plateau_lbl.setStyleSheet(f"color: {colour};" if colour else "")
+            self._promo_lbl.setText(f"Promos  {count}/{window}")
+            # Green while still promoting (model improving); red when dry (saturated)
+            colour = "#6acc6a" if count > 0 else "#cc6a6a"
+            self._promo_lbl.setStyleSheet(f"color: {colour};")
 
     @pyqtSlot(int)
     def on_buffer_updated(self, n: int) -> None:
