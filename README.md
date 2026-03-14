@@ -233,18 +233,18 @@ python main.py --headless --checkpoint-dir run_b --workers 4
 
 ### Tournament
 
-Compare models from different checkpoint directories using a Swiss tournament with Glicko-2 ratings. Each round pairs models with similar standings; pairings within a round run in parallel. Final ranking is by Glicko-2 rating.
+Compare models from different checkpoint directories using a round-robin tournament with Glicko-2 ratings. Every model plays every other model each round; all matches within a round run in parallel. Final ranking is by Glicko-2 rating.
 
 ```bash
 python tournament.py checkpoints/ checkpoints2/ checkpoints3/
-python tournament.py checkpoints/ checkpoints2/ --rounds 7 --games 20 --sims 400
+python tournament.py checkpoints/ checkpoints2/ --rounds 3 --games 20 --sims 400
 python tournament.py checkpoints/ checkpoints2/ --board-size 11
 ```
 
 | Flag | Default | Description |
 |---|---|---|
-| `--rounds N` | ceil(log₂(N))+2 | Swiss rounds |
-| `--games N` | 10 | Games per match per round (should be even) |
+| `--rounds N` | 1 | How many times to run the full round-robin |
+| `--games N` | 10 | Games per match (should be even) |
 | `--sims N` | from config | MCTS simulations per move |
 | `--board-size N` | smallest detected | Board size override |
 
