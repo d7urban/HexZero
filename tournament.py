@@ -12,9 +12,11 @@ Usage:
 """
 
 import argparse
+import hashlib
 import json
 import math
 import os
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 import torch
@@ -141,16 +143,20 @@ def _save_ratings(ratings: dict) -> None:
     os.replace(tmp, _RATING_FILE)
 
 
-def _inode(best_pt_path: str) -> str:
-    return str(os.stat(best_pt_path).st_ino)
+def _sha256(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
-def _rating_for(inode: str, label: str, ratings: dict) -> tuple[Glicko2, str]:
-    """Return (Glicko2, key) for this inode, allocating a new key if needed."""
+def _rating_for(sha: str, label: str, ratings: dict) -> tuple[Glicko2, str]:
+    """Return (Glicko2, key) for this sha256, allocating a new key if needed."""
     for key, entry in ratings.items():
         if key.startswith("_"):
             continue
-        if entry.get("inode") == inode:
+        if entry.get("sha256") == sha:
             return Glicko2(mu=entry["mu"], phi=entry["phi"], sigma=entry["sigma"]), key
 
     next_id = ratings.get("_next_id", 1)
@@ -165,12 +171,12 @@ def _rating_for(inode: str, label: str, ratings: dict) -> tuple[Glicko2, str]:
 
 class Player:
     def __init__(self, label: str, net, board_size: int, iteration,
-                 inode: str, rating_key: str, glicko: Glicko2):
+                 sha256: str, rating_key: str, glicko: Glicko2):
         self.label      = label
         self.net        = net
         self.board_size = board_size
         self.iteration  = iteration
-        self.inode      = inode
+        self.sha256     = sha256
         self.rating_key = rating_key
         self.glicko     = glicko
 
@@ -188,16 +194,16 @@ def _load_player(checkpoint_dir: str, cfg: HexZeroConfig,
     path = ckpt_io.best_checkpoint_path(checkpoint_dir)
     if path is None:
         raise FileNotFoundError(f"No best.pt found in {checkpoint_dir!r}")
-    inode  = _inode(path)
-    data   = ckpt_io.load(path, device)
-    net    = build_net(cfg, device, compile=False)
+    sha         = _sha256(path)
+    data        = ckpt_io.load(path, device)
+    net         = build_net(cfg, device, compile=False)
     ckpt_io.load_weights(net, data["model_state"])
     net.eval()
     board_size  = data.get("metrics", {}).get("board_size") or cfg.initial_board_size
     iteration   = data.get("iteration", "?")
     label       = _label(checkpoint_dir)
-    glicko, key = _rating_for(inode, label, ratings)
-    return Player(label, net, board_size, iteration, inode, key, glicko)
+    glicko, key = _rating_for(sha, label, ratings)
+    return Player(label, net, board_size, iteration, sha, key, glicko)
 
 
 def _play_match(
@@ -241,7 +247,7 @@ def _flush_ratings(players: list[Player], ratings: dict) -> None:
     for p in players:
         ratings[p.rating_key] = {
             "label":  p.label,
-            "inode":  p.inode,
+            "sha256": p.sha256,
             "mu":     p.glicko.mu,
             "phi":    p.glicko.phi,
             "sigma":  p.glicko.sigma,
@@ -332,11 +338,13 @@ def main() -> None:
           f"Games/match: {args.games}  |  "
           f"Matches/round: {len(pairs)}  |  Rounds: {args.rounds}\n")
 
+    t_total = time.monotonic()
     for rnd in range(1, args.rounds + 1):
         print(sep)
         print(f"Round {rnd}/{args.rounds}  ({len(pairs)} matches in parallel)")
         print(sep)
 
+        t_round = time.monotonic()
         futures: dict = {}
         with ThreadPoolExecutor(max_workers=len(pairs)) as pool:
             for pa, pb in pairs:
@@ -350,6 +358,7 @@ def main() -> None:
             print(f"  {pa.label} vs {pb.label}:  "
                   f"{pa.label} {aw}/{args.games}  {pb.label} {bw}/{args.games}")
             round_results.append((pa, pb, aw, bw))
+        print(f"  Round time: {time.monotonic() - t_round:.1f}s")
 
         _update_ratings(round_results, players)
         _flush_ratings(players, ratings)
@@ -372,7 +381,8 @@ def main() -> None:
               f"{pl.glicko.rating:>7.0f} ± {pl.glicko.rd:<6.0f}  {pl.glicko.sigma:.4f}")
     print("═" * (col + 36))
     print(f"\nWinner: {ranked[0].label}  "
-          f"(rating {ranked[0].glicko.rating:.0f} ± {ranked[0].glicko.rd:.0f})")
+          f"(rating {ranked[0].glicko.rating:.0f} ± {ranked[0].glicko.rd:.0f})  "
+          f"—  total time: {time.monotonic() - t_total:.1f}s")
 
 
 if __name__ == "__main__":
