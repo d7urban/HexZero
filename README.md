@@ -199,13 +199,14 @@ Click **▶ Start Training** to begin the self-play loop. The best checkpoint is
 ### Play vs AI
 
 ```bash
-python play.py                    # play as Blue (first move)
-python play.py --color red        # play as Red (second move)
-python play.py --sims 400         # stronger AI
+python play.py                              # play as Blue (first move)
+python play.py --color red                  # play as Red (second move)
+python play.py --sims 400                   # stronger AI
 python play.py --board-size 9
+python play.py --checkpoint-dir checkpoints2  # play against a specific run
 ```
 
-Loads the best checkpoint automatically. The board and MCTS viewer are shared with the training GUI. When the pie rule is enabled and you play as Red, click Blue's opening stone to swap sides.
+Loads the best checkpoint automatically. The board and MCTS viewer are shared with the training GUI. When the pie rule is enabled and you play as Red, click Blue's opening stone to swap sides. A subtle audio chime plays on swap and on game end (routed through the media sink, not the notification channel).
 
 ### Headless mode
 

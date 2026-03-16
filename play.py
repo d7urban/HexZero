@@ -2,15 +2,19 @@
 play.py — Human vs best checkpoint.
 
 Usage:
-    python play.py                     # play as Blue (first move)
-    python play.py --color red         # play as Red
-    python play.py --sims 400          # stronger AI
-    python play.py --board-size 9      # override board size
+    python play.py                           # play as Blue (first move)
+    python play.py --color red               # play as Red
+    python play.py --sims 400                # stronger AI
+    python play.py --board-size 9            # override board size
+    python play.py --checkpoint-dir checkpoints2   # use a specific run
 """
 
 import argparse
+import io
+import subprocess
 import sys
 import threading
+import wave as _wave_mod
 
 import numpy as np
 import torch
@@ -29,6 +33,39 @@ from PyQt6.QtWidgets import (
 )
 
 import hexzero.checkpoint as ckpt_io
+
+
+# ---------------------------------------------------------------------------
+# Audio  (stdlib-only: wave + aplay)
+# ---------------------------------------------------------------------------
+
+def _make_chime_bytes(freq: float, duration: float, decay: float) -> bytes:
+    sr = 44100
+    t = np.linspace(0, duration, int(sr * duration), endpoint=False)
+    samples = (np.exp(-decay * t) * np.sin(2 * np.pi * freq * t) * 8192).astype(np.int16)
+    buf = io.BytesIO()
+    with _wave_mod.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(sr)
+        w.writeframes(samples.tobytes())
+    return buf.getvalue()
+
+_CHIME_SWAP = _make_chime_bytes(880,  0.4, 8.0)   # soft high ding
+_CHIME_WIN  = _make_chime_bytes(1047, 0.8, 4.0)   # resonant bell
+
+
+def _play_chime(wav_bytes: bytes) -> None:
+    def _run() -> None:
+        try:
+            proc = subprocess.Popen(
+                ["paplay", "--property=media.role=music", "/dev/stdin"],
+                stdin=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            )
+            proc.communicate(wav_bytes, timeout=3)
+        except Exception:
+            pass
+    threading.Thread(target=_run, daemon=True).start()
 from config import HexZeroConfig
 from hexzero.features import extract_features
 from hexzero.game import BLACK, SWAP_MOVE, WHITE, HexState
@@ -168,11 +205,14 @@ class PlayWindow(QMainWindow):
             self._color_combo.blockSignals(True)
             self._color_combo.setCurrentIndex(0 if self._human_color == BLACK else 1)
             self._color_combo.blockSignals(False)
+            _play_chime(_CHIME_SWAP)
 
         self._board.set_state(self._state)
         self._refresh_ui()
 
-        if not self._state.is_terminal() and self._state.current_player != self._human_color:
+        if self._state.is_terminal():
+            _play_chime(_CHIME_WIN)
+        elif self._state.current_player != self._human_color:
             self._start_ai_turn()
 
     def _start_ai_turn(self) -> None:
@@ -317,7 +357,7 @@ class PlayWindow(QMainWindow):
         toolbar.addSeparator()
         toolbar.addWidget(QLabel("  AI sims: "))
         self._sims_spin = QSpinBox()
-        self._sims_spin.setRange(10, 2000)
+        self._sims_spin.setRange(10, 100_000)
         self._sims_spin.setValue(self._sims)
         self._sims_spin.setSingleStep(50)
         self._sims_spin.setToolTip("MCTS simulations per AI move (takes effect next game)")
@@ -352,7 +392,7 @@ class PlayWindow(QMainWindow):
         status_bar.addPermanentWidget(QLabel(f"  Device: {self._device}"))
         self.setStatusBar(status_bar)
 
-        self.setWindowTitle("HexZero — Play vs AI")
+        self.setWindowTitle(f"HexZero — Play vs AI  [{self.cfg.checkpoint_dir}]")
         self.resize(1000, 680)
 
     def closeEvent(self, event) -> None:
@@ -366,6 +406,8 @@ class PlayWindow(QMainWindow):
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Play Hex against the best trained model")
+    p.add_argument("--checkpoint-dir", default=None,
+                   help="Checkpoint directory to load best.pt from (default: from config)")
     p.add_argument("--board-size", type=int, default=None,
                    help="Board size override (default: from checkpoint)")
     p.add_argument("--sims",       type=int, default=200,
@@ -379,6 +421,8 @@ def main() -> None:
     args = parse_args()
     cfg  = HexZeroConfig()
 
+    if args.checkpoint_dir is not None:
+        cfg.checkpoint_dir = args.checkpoint_dir
     if args.board_size is not None:
         cfg.initial_board_size = args.board_size
 

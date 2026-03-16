@@ -69,9 +69,9 @@ class TrainingWorker(QObject):
         self._stop_event.set()
 
     def _emit_promotion_freq(self, recent_promotions: list) -> None:
-        window   = self.cfg.min_iters_per_size
-        has_data = len(recent_promotions) >= window
+        has_data = len(recent_promotions) > 0
         count    = sum(recent_promotions) if has_data else 0
+        window   = len(recent_promotions) if has_data else self.cfg.min_iters_per_size
         self.signals.promotion_freq_updated.emit(count, window, has_data)
 
     @pyqtSlot()

@@ -70,8 +70,14 @@ def promote_to_best(path: str, checkpoint_dir: str) -> None:
 
     Must be called explicitly by the caller after confirming the checkpoint
     is a new champion.  checkpoint.save() intentionally does NOT do this.
+
+    Uses a temp file + os.replace so the destination always gets a fresh
+    inode — important for tournament.py's inode-based rating identity.
     """
-    shutil.copy2(path, Path(checkpoint_dir) / "best.pt")
+    ckpt_dir = Path(checkpoint_dir)
+    tmp = ckpt_dir / "best.pt.tmp"
+    shutil.copy2(path, tmp)
+    os.replace(tmp, ckpt_dir / "best.pt")
 
 
 def load(path: str, device: torch.device | None = None) -> dict:
