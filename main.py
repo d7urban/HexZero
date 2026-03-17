@@ -33,10 +33,8 @@ def run_headless(cfg: HexZeroConfig, resume_path: str = None) -> None:
     import torch
 
     import hexzero.checkpoint as ckpt_io
-    from hexzero.arena import candidate_is_better, run_arena
     from hexzero.net import build_net
-    from hexzero.self_play import run_self_play_parallel
-    from hexzero.trainer import Trainer
+    from hexzero.trainer import LoopCallbacks, Trainer
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
@@ -44,129 +42,37 @@ def run_headless(cfg: HexZeroConfig, resume_path: str = None) -> None:
     net     = build_net(cfg, device)
     trainer = Trainer(cfg, net, device)
 
-    buf_path   = os.path.join(cfg.checkpoint_dir, "replay_buffer.pt.gz")
-    best_path  = resume_path or ckpt_io.best_checkpoint_path(cfg.checkpoint_dir)
-    board_size = cfg.initial_board_size
+    initial_path = None
+    if resume_path:
+        trainer.load_checkpoint(resume_path)
+        initial_path = resume_path
+        print(f"Resuming from {resume_path}")
 
-    # training_state.json is written atomically after every iteration and is
-    # the single authoritative source for iteration counter and curriculum state.
-    ts = ckpt_io.load_training_state(cfg.checkpoint_dir)
-
-    if best_path is None:
-        print("No checkpoint found — saving initial weights…")
-        best_path = trainer.save_checkpoint(0, board_size)
-        ckpt_io.promote_to_best(best_path, cfg.checkpoint_dir)
-        size_idx           = cfg.board_sizes.index(board_size) if board_size in cfg.board_sizes else 0
-        iteration          = 0
-        iters_on_size      = 0
-        recent_promotions: list[bool] = []
-    else:
-        trainer.load_checkpoint(best_path)
-        # Load once and reuse for board_size; avoids a second torch.load call.
-        ckpt_data  = ckpt_io.load(best_path, device)
-        saved_size = ckpt_data.get("metrics", {}).get("board_size")
-        if saved_size and saved_size in cfg.board_sizes:
-            board_size = saved_size
-
-        if resume_path:
-            # Explicit --checkpoint: the JSON may belong to a different run;
-            # trust the checkpoint's own counter and reset curriculum state.
-            size_idx      = cfg.board_sizes.index(board_size) if board_size in cfg.board_sizes else 0
-            iteration          = ckpt_data.get("iteration", 0)
-            iters_on_size      = 0
-            recent_promotions  = []
-        else:
-            # Normal resume: JSON is consistent with best.pt (both updated
-            # together at the end of each accepted iteration).
-            size_idx          = ts.get("size_idx",
-                                       cfg.board_sizes.index(board_size)
-                                       if board_size in cfg.board_sizes else 0)
-            iteration         = ts.get("iteration", 0)
-            iters_on_size     = ts.get("iters_on_size", 0)
-            recent_promotions = ts.get("recent_promotions", [])
-
-        print(f"Resumed from {best_path}  (board {board_size}×{board_size}  iter {iteration})")
-
-    if os.path.exists(buf_path):
-        print(f"Loading replay buffer from {buf_path}…", end="", flush=True)
-        trainer.replay_buffer.load(buf_path)
-        print(f" {len(trainer.replay_buffer)} samples")
+    class _PrintCallbacks(LoopCallbacks):
+        def on_iteration_start(self, i, bs):
+            print(f"\n{'='*60}")
+            print(f"Iteration {i}  |  board {bs}×{bs}")
+        def on_self_play_done(self, n, sw, gp):
+            swap_info = f"  swap {sw}/{gp} ({100*sw//gp}%)" if gp > 0 else ""
+            print(f"  Self-play: {n} samples ({gp} games × 2){swap_info}")
+        def on_train_done(self, ml):
+            if ml:
+                last = ml[-1]
+                print(f"  Training: loss={last['loss']:.4f}  policy_acc={last['policy_acc']:.3f}")
+        def on_arena_done(self, cw, chw, draws):
+            print(f"  Arena: candidate {cw}/{cw+chw+draws}  champion {chw}/{cw+chw+draws}")
+        def on_promoted(self, path):
+            print("  → New champion accepted.")
+        def on_champion_retained(self):
+            print("  → Champion retained.")
+        def on_board_size_advanced(self, bs, reason, promoted, iteration):
+            prefix = "new champion + " if promoted else ""
+            print(f"  → {prefix}Curriculum advanced to {bs}×{bs}! ({reason})")
 
     try:
-        while True:
-            iteration += 1
-            print(f"\n{'='*60}")
-            print(f"Iteration {iteration}  |  board {board_size}×{board_size}")
-
-            print("  Self-play…", end="", flush=True)
-            samples, swap_games, games_played = run_self_play_parallel(
-                cfg, best_path, device, board_size, cfg.games_per_iteration)
-            for s in samples:
-                trainer.replay_buffer.add(s)
-            swap_info = ""
-            if cfg.use_pie_rule and games_played > 0:
-                swap_info = f"  swap {swap_games}/{games_played} ({100*swap_games//games_played}%)"
-            print(f" {len(samples)} samples ({games_played} games × 2){swap_info}")
-            trainer.replay_buffer.save(buf_path)
-
-            print("  Training…", end="", flush=True)
-            metrics_list = trainer.train_iteration(iteration, board_size)
-            if metrics_list:
-                last = metrics_list[-1]
-                print(f" loss={last['loss']:.4f}  policy_acc={last['policy_acc']:.3f}")
-
-            cand_path = trainer.save_checkpoint(iteration, board_size)
-
-            print("  Arena…", end="", flush=True)
-            cw, chw, draws = run_arena(cand_path, best_path, cfg, board_size)
-            total = cw + chw + draws
-            print(f" candidate {cw}/{total}  champion {chw}/{total}")
-
-            iters_on_size += 1
-
-            # Champion promotion — independent of curriculum decision.
-            promoted = candidate_is_better(cw, chw, total, cfg.arena_win_threshold)
-            if promoted:
-                ckpt_io.promote_to_best(cand_path, cfg.checkpoint_dir)
-                best_path = ckpt_io.best_checkpoint_path(cfg.checkpoint_dir)
-                print("  → New champion accepted.")
-            else:
-                print("  → Champion retained.")
-
-            recent_promotions.append(promoted)
-            recent_promotions = recent_promotions[-cfg.min_iters_per_size:]
-
-            ckpt_io.save_training_state(cfg.checkpoint_dir, {
-                "iteration":          iteration,
-                "board_size":         board_size,
-                "size_idx":           size_idx,
-                "iters_on_size":      iters_on_size,
-                "recent_promotions":  recent_promotions,
-            })
-
-            # Curriculum advancement — checked every iteration regardless of promotion.
-            # Two triggers: no recent promotions (normal) or max_iters_per_size (safety valve).
-            next_idx    = size_idx + 1
-            no_promos   = (iters_on_size >= cfg.min_iters_per_size
-                           and not any(recent_promotions))
-            max_reached = iters_on_size >= cfg.max_iters_per_size
-            can_advance = (
-                iters_on_size >= cfg.min_iters_per_size
-                and next_idx < len(cfg.board_sizes)
-                and (no_promos or max_reached)
-            )
-            if can_advance:
-                size_idx          = next_idx
-                board_size        = cfg.board_sizes[size_idx]
-                iters_on_size     = 0
-                recent_promotions = []
-                trainer.reset_lr()
-                reason = "no recent promotions" if no_promos else f"max {cfg.max_iters_per_size} iters"
-                prefix = "new champion + " if promoted else ""
-                print(f"  → {prefix}Curriculum advanced to {board_size}×{board_size}! ({reason})")
-
+        trainer.run_loop(callbacks=_PrintCallbacks(), initial_path=initial_path)
     except KeyboardInterrupt:
-        print("\nTraining interrupted. Checkpoint saved at:", best_path)
+        print("\nTraining interrupted.")
 
 
 def run_gui(cfg: HexZeroConfig, resume_path: str = None) -> None:

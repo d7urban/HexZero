@@ -59,208 +59,42 @@ class TrainingWorker(QObject):
 
     def __init__(self, trainer: Trainer, cfg: HexZeroConfig, signals: TrainingSignals):
         super().__init__()
-        self.trainer    = trainer
-        self.cfg        = cfg
-        self.signals    = signals
+        self.trainer     = trainer
+        self.cfg         = cfg
+        self.signals     = signals
         self._stop_event = threading.Event()
-        self._iteration  = 0
 
     def stop(self) -> None:
         self._stop_event.set()
 
-    def _emit_promotion_freq(self, recent_promotions: list) -> None:
-        has_data = len(recent_promotions) > 0
-        count    = sum(recent_promotions) if has_data else 0
-        window   = len(recent_promotions) if has_data else self.cfg.min_iters_per_size
-        self.signals.promotion_freq_updated.emit(count, window, has_data)
-
     @pyqtSlot()
     def run(self) -> None:
-        from hexzero.arena import candidate_is_better, run_arena
-        from hexzero.self_play import run_self_play_parallel
+        from hexzero.trainer import LoopCallbacks
 
-        cfg        = self.cfg
-        board_size = cfg.initial_board_size
-        size_idx   = (cfg.board_sizes.index(board_size)
-                      if board_size in cfg.board_sizes else 0)
+        cfg = self.cfg
+        sig = self.signals
 
-        # Bootstrap: save initial checkpoint if none exists yet.
-        # After promote_to_best, best_path always points to the stable
-        # "best.pt" path so it is never pruned by the rolling checkpoint window.
-        best_path = ckpt_io.best_checkpoint_path(cfg.checkpoint_dir)
-        if best_path is None:
-            self.signals.status_message.emit("Saving initial checkpoint…")
-            init_path = self.trainer.save_checkpoint(0, board_size)
-            ckpt_io.promote_to_best(init_path, cfg.checkpoint_dir)
-            best_path = ckpt_io.best_checkpoint_path(cfg.checkpoint_dir)
-            self.signals.checkpoint_saved.emit(init_path)
-
-        # Resume iteration counter from disk so we never overwrite / prune a
-        # freshly-saved candidate checkpoint on the very first save.
-        self._iteration = ckpt_io.latest_iteration(cfg.checkpoint_dir)
-
-        # Restore replay buffer from disk if available
-        buf_path = os.path.join(cfg.checkpoint_dir, "replay_buffer.pt.gz")
-        if os.path.exists(buf_path):
-            try:
-                self.signals.status_message.emit("Loading replay buffer…")
-                self.trainer.replay_buffer.load(buf_path)
-                self.signals.buffer_updated.emit(len(self.trainer.replay_buffer))
-            except Exception as e:
-                self.signals.status_message.emit(f"Could not load replay buffer: {e}")
-
-        # Restore board size and per-size iteration count from persisted state
-        ts = ckpt_io.load_training_state(cfg.checkpoint_dir)
-        if ts.get("board_size") and ts["board_size"] in cfg.board_sizes:
-            board_size = ts["board_size"]
-            size_idx   = cfg.board_sizes.index(board_size)
-        iters_on_size     = ts.get("iters_on_size", 0)
-        recent_promotions: list[bool] = ts.get("recent_promotions", [])
-        self._emit_promotion_freq(recent_promotions)
-
-        stop = self._stop_event
-        while not stop.is_set():
-            self._iteration += 1
-            self.signals.iteration_started.emit(self._iteration)
-
-            # ----------------------------------------------------------
-            # 1. Self-play
-            # ----------------------------------------------------------
-            self.signals.status_message.emit(
-                f"Iteration {self._iteration} — self-play ({board_size}×{board_size})…"
-            )
-            self.signals.self_play_progress.emit(0, cfg.games_per_iteration)
-
-            def _sp_progress(done: int, total: int) -> None:
-                self.signals.self_play_progress.emit(done, total)
-                self.signals.buffer_updated.emit(len(self.trainer.replay_buffer))
-
-            device = self.trainer.device
-            samples, swap_games, games_played = run_self_play_parallel(
-                cfg, best_path, device, board_size, cfg.games_per_iteration,
-                progress_callback=_sp_progress,
-                stop_event=stop,
-            )
-            self.signals.swap_rate_updated.emit(swap_games, games_played)
-            for s in samples:
-                self.trainer.replay_buffer.add(s)
-            self.signals.buffer_updated.emit(len(self.trainer.replay_buffer))
-
-            # Persist buffer so it survives restarts
-            try:
-                self.trainer.replay_buffer.save(buf_path)
-            except Exception:
-                pass  # non-fatal; training continues without saving
-
-            if stop.is_set():
-                break
-
-            # ----------------------------------------------------------
-            # 2. Train
-            # ----------------------------------------------------------
-            self.signals.status_message.emit(
-                f"Iteration {self._iteration} — training…"
-            )
-            metrics_list = self.trainer.train_iteration(self._iteration, board_size)
-
-            if stop.is_set():
-                break
-
-            # ----------------------------------------------------------
-            # 3. Save candidate checkpoint
-            # ----------------------------------------------------------
-            cand_path = self.trainer.save_checkpoint(self._iteration, board_size)
-
-            # ----------------------------------------------------------
-            # 4. Arena
-            # ----------------------------------------------------------
-            self.signals.status_message.emit(
-                f"Iteration {self._iteration} — arena…"
-            )
-            def _arena_progress(done: int, cw_so_far: int, total: int) -> None:
-                self.signals.arena_progress.emit(done, cw_so_far, total)
-
-            cw, chw, draws = run_arena(cand_path, best_path, cfg, board_size,
-                                       progress_callback=_arena_progress,
-                                       stop_event=stop)
-
-            if stop.is_set():
-                break
-
-            self.signals.arena_result.emit(cw, chw, draws)
-
-            total    = cw + chw + draws
-            win_rate = cw / total if total > 0 else 0.0
-
-            iters_on_size += 1
-            self.signals.curriculum_progress.emit(iters_on_size, cfg.min_iters_per_size)
-
-            # Champion promotion — independent of curriculum decision.
-            promoted = candidate_is_better(cw, chw, total, cfg.arena_win_threshold)
-            if promoted:
-                ckpt_io.promote_to_best(cand_path, cfg.checkpoint_dir)
-                self.signals.checkpoint_saved.emit(cand_path)
-                # best_path remains "best.pt" — stable, never pruned
-
-            recent_promotions.append(promoted)
-            recent_promotions = recent_promotions[-cfg.min_iters_per_size:]
-            self._emit_promotion_freq(recent_promotions)
-
-            ckpt_io.save_training_state(cfg.checkpoint_dir, {
-                "iteration":         self._iteration,
-                "board_size":        board_size,
-                "size_idx":          size_idx,
-                "iters_on_size":     iters_on_size,
-                "recent_promotions": recent_promotions,
-            })
-
-            # Curriculum advancement — checked every iteration regardless of whether
-            # a new champion was just promoted.  Two ways to advance:
-            #   1. No recent promotions (normal: candidate can no longer beat champion).
-            #   2. max_iters_per_size exceeded (safety valve).
-            next_idx    = size_idx + 1
-            no_promos   = (iters_on_size >= cfg.min_iters_per_size
-                           and not any(recent_promotions))
-            max_reached = iters_on_size >= cfg.max_iters_per_size
-            can_advance = (
-                iters_on_size >= cfg.min_iters_per_size
-                and next_idx < len(cfg.board_sizes)
-                and (no_promos or max_reached)
-            )
-
-            if can_advance:
-                size_idx          = next_idx
-                board_size        = cfg.board_sizes[size_idx]
-                iters_on_size     = 0
-                recent_promotions = []
-                self._emit_promotion_freq(recent_promotions)
-                self.trainer.reset_lr()
-                self.signals.board_size_advanced.emit(board_size)
-                reason = "no recent promotions" if no_promos else f"max {cfg.max_iters_per_size} iters"
-                prefix = "new champion + " if promoted else ""
-                self.signals.status_message.emit(
-                    f"Iteration {self._iteration} — {prefix}curriculum advanced to "
-                    f"{board_size}×{board_size}! ({reason})"
-                )
-            else:
-                arena_str = (
-                    f"new champion! ({cw}/{total}, {win_rate:.0%})" if promoted
-                    else f"champion retained ({chw}/{total}, {win_rate:.0%} for candidate)"
-                )
-                if next_idx >= len(cfg.board_sizes):
-                    suffix = "  (at largest board size)"
-                elif iters_on_size < cfg.min_iters_per_size:
-                    iters_left = cfg.min_iters_per_size - iters_on_size
-                    suffix = f"  (need {iters_left} more iter(s) on {board_size}×{board_size})"
-                else:
-                    promos = sum(recent_promotions)
-                    suffix = f"  (promos {promos}/{len(recent_promotions)}, max in {cfg.max_iters_per_size - iters_on_size} iter(s))"
-                self.signals.status_message.emit(
-                    f"Iteration {self._iteration} — {arena_str}{suffix}"
+        class _GUICallbacks(LoopCallbacks):
+            def on_status(_, msg):                           sig.status_message.emit(msg)
+            def on_iteration_start(_, i, bs):                sig.iteration_started.emit(i)
+            def on_self_play_progress(_, d, t):              sig.self_play_progress.emit(d, t)
+            def on_swap_rate(_, s, p):                       sig.swap_rate_updated.emit(s, p)
+            def on_buffer_updated(_, n):                     sig.buffer_updated.emit(n)
+            def on_arena_progress(_, d, c, t):               sig.arena_progress.emit(d, c, t)
+            def on_arena_done(_, cw, chw, draws):            sig.arena_result.emit(cw, chw, draws)
+            def on_promoted(_, path):                        sig.checkpoint_saved.emit(path)
+            def on_curriculum_progress(_, i, m):             sig.curriculum_progress.emit(i, m)
+            def on_board_size_advanced(_, bs, reason, p, i): sig.board_size_advanced.emit(bs)
+            def on_iteration_done(_, i):                     sig.iteration_finished.emit(i)
+            def on_promotion_freq(_, rp):
+                has_data = len(rp) > 0
+                sig.promotion_freq_updated.emit(
+                    sum(rp) if has_data else 0,
+                    len(rp) if has_data else cfg.min_iters_per_size,
+                    has_data,
                 )
 
-            self.signals.iteration_finished.emit(self._iteration)
-
+        self.trainer.run_loop(stop_event=self._stop_event, callbacks=_GUICallbacks())
         self.finished.emit()
 
 
