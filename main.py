@@ -127,8 +127,8 @@ def run_headless(cfg: HexZeroConfig, resume_path: str = None) -> None:
             # Champion promotion — independent of curriculum decision.
             promoted = candidate_is_better(cw, chw, total, cfg.arena_win_threshold)
             if promoted:
-                best_path = cand_path
-                ckpt_io.promote_to_best(best_path, cfg.checkpoint_dir)
+                ckpt_io.promote_to_best(cand_path, cfg.checkpoint_dir)
+                best_path = ckpt_io.best_checkpoint_path(cfg.checkpoint_dir)
                 print("  → New champion accepted.")
             else:
                 print("  → Champion retained.")
