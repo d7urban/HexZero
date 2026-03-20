@@ -46,6 +46,7 @@ class LoopCallbacks:
     def on_promotion_freq(self, recent_promotions: list) -> None: pass
     def on_curriculum_progress(self, iters_on_size: int, min_iters: int) -> None: pass
     def on_board_size_advanced(self, board_size: int, reason: str, promoted: bool, iteration: int) -> None: pass
+    def on_sims_doubled(self, new_sims: int, iteration: int) -> None: pass
     def on_iteration_done(self, iteration: int) -> None: pass
 
 
@@ -241,6 +242,16 @@ class Trainer:
         recent_promotions: list[bool] = ts.get("recent_promotions", [])
         cb.on_promotion_freq(recent_promotions)
 
+        # Stagnation state — only active at the final board size.
+        # Capture original final-size sims before any restore so the cap is
+        # always relative to what's in the config, not a previously doubled value.
+        _original_final_sims = (cfg.mcts_simulations_per_size[-1]
+                                if cfg.mcts_simulations_per_size
+                                else cfg.mcts_simulations)
+        if ts.get("mcts_simulations_per_size"):
+            cfg.mcts_simulations_per_size = ts["mcts_simulations_per_size"]
+        iters_without_promotion: int = ts.get("iters_without_promotion", 0)
+
         # ---- Main loop -----------------------------------------------------------
         while not stop.is_set():
             iteration += 1
@@ -307,12 +318,36 @@ class Trainer:
             recent_promotions = recent_promotions[-cfg.min_iters_per_size:]
             cb.on_promotion_freq(recent_promotions)
 
+            # Stagnation recovery — only at the final board size.
+            at_largest = (size_idx == len(cfg.board_sizes) - 1)
+            if at_largest:
+                if promoted:
+                    iters_without_promotion = 0
+                else:
+                    iters_without_promotion += 1
+                sims_cap = int(_original_final_sims * cfg.stagnation_sims_cap)
+                current_sims = (cfg.mcts_simulations_per_size[-1]
+                                if cfg.mcts_simulations_per_size
+                                else cfg.mcts_simulations)
+                if (iters_without_promotion >= cfg.stagnation_window
+                        and current_sims < sims_cap):
+                    new_sims = min(current_sims * 2, sims_cap)
+                    if cfg.mcts_simulations_per_size:
+                        cfg.mcts_simulations_per_size[-1] = new_sims
+                    else:
+                        cfg.mcts_simulations = new_sims
+                    iters_without_promotion = 0
+                    self.reset_lr()
+                    cb.on_sims_doubled(new_sims, iteration)
+
             ckpt_io.save_training_state(cfg.checkpoint_dir, {
-                "iteration":         iteration,
-                "board_size":        board_size,
-                "size_idx":          size_idx,
-                "iters_on_size":     iters_on_size,
-                "recent_promotions": recent_promotions,
+                "iteration":                 iteration,
+                "board_size":                board_size,
+                "size_idx":                  size_idx,
+                "iters_on_size":             iters_on_size,
+                "recent_promotions":         recent_promotions,
+                "iters_without_promotion":   iters_without_promotion,
+                "mcts_simulations_per_size": cfg.mcts_simulations_per_size,
             })
 
             # Curriculum advancement

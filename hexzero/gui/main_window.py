@@ -85,6 +85,10 @@ class TrainingWorker(QObject):
             def on_promoted(_, path):                        sig.checkpoint_saved.emit(path)
             def on_curriculum_progress(_, i, m):             sig.curriculum_progress.emit(i, m)
             def on_board_size_advanced(_, bs, reason, p, i): sig.board_size_advanced.emit(bs)
+            def on_sims_doubled(_, new_sims, i):
+                sig.status_message.emit(
+                    f"Iteration {i} — stagnation: MCTS sims doubled to {new_sims} for final board size."
+                )
             def on_iteration_done(_, i):                     sig.iteration_finished.emit(i)
             def on_promotion_freq(_, rp):
                 has_data = len(rp) > 0

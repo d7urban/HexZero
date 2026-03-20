@@ -68,6 +68,8 @@ def run_headless(cfg: HexZeroConfig, resume_path: str = None) -> None:
         def on_board_size_advanced(self, bs, reason, promoted, iteration):
             prefix = "new champion + " if promoted else ""
             print(f"  → {prefix}Curriculum advanced to {bs}×{bs}! ({reason})")
+        def on_sims_doubled(self, new_sims, iteration):
+            print(f"  → Stagnation: MCTS sims doubled to {new_sims} for final board size.")
 
     try:
         trainer.run_loop(callbacks=_PrintCallbacks(), initial_path=initial_path)

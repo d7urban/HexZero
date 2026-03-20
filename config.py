@@ -87,6 +87,14 @@ class HexZeroConfig:
     # this many iterations on the current size with no further improvement.
     max_iters_per_size: int = 35
 
+    # Stagnation recovery (final board size only):
+    # If no promotion occurs in stagnation_window consecutive iterations, MCTS
+    # sims for the final board size are doubled to improve signal quality.
+    # Repeats until sims reach stagnation_sims_cap × the starting value.
+    # The counter resets after each doubling and after each promotion.
+    stagnation_window:   int = 25   # iterations without promotion before doubling
+    stagnation_sims_cap: int = 4    # max multiplier vs. starting sims
+
     # Pie rule (swap rule): after BLACK's first move WHITE may swap colours.
     # Disable for very early training runs before the net has learned to play.
     use_pie_rule: bool = True
