@@ -49,9 +49,11 @@ def run_headless(cfg: HexZeroConfig, resume_path: str = None) -> None:
         print(f"Resuming from {resume_path}")
 
     class _PrintCallbacks(LoopCallbacks):
-        def on_iteration_start(self, i, bs):
+        def on_iteration_start(self, i, bs, sims, stag_stage, stag_counter):
+            stag = (f"  |  #{stag_stage}:{stag_counter}/{cfg.stagnation_window}"
+                    if stag_stage > 0 else "")
             print(f"\n{'='*60}")
-            print(f"Iteration {i}  |  board {bs}×{bs}")
+            print(f"Iteration {i}  |  board {bs}×{bs}  |  sims {sims}{stag}")
         def on_self_play_done(self, n, sw, gp):
             swap_info = f"  swap {sw}/{gp} ({100*sw//gp}%)" if gp > 0 else ""
             print(f"  Self-play: {n} samples ({gp} games × 2){swap_info}")

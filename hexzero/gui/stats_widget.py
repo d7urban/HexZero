@@ -198,6 +198,13 @@ class StatsWidget(QWidget):
         self._promo_lbl = _label("Promos  —")
         layout.addWidget(self._promo_lbl)
 
+        self._stag_sep = _sep()
+        self._stag_lbl = _label("")
+        self._stag_sep.setVisible(False)
+        self._stag_lbl.setVisible(False)
+        layout.addWidget(self._stag_sep)
+        layout.addWidget(self._stag_lbl)
+
         layout.addStretch()
 
         # Curriculum ladder (right-aligned)
@@ -268,6 +275,16 @@ class StatsWidget(QWidget):
             # Green while still promoting (model improving); red when dry (saturated)
             colour = "#6acc6a" if count > 0 else "#cc6a6a"
             self._promo_lbl.setStyleSheet(f"color: {colour};")
+
+    @pyqtSlot(int, int, int)
+    def on_stagnation_progress(self, stage: int, counter: int, window: int) -> None:
+        visible = stage > 0
+        self._stag_sep.setVisible(visible)
+        self._stag_lbl.setVisible(visible)
+        if visible:
+            colour = "#ccaa44" if stage == 1 else "#cc6a44"
+            self._stag_lbl.setStyleSheet(f"color: {colour}; font-size: 10px; font-weight: bold;")
+            self._stag_lbl.setText(f"Stag  #{stage}:{counter}/{window}")
 
     @pyqtSlot(int)
     def on_buffer_updated(self, n: int) -> None:

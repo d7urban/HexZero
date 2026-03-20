@@ -33,7 +33,8 @@ if TYPE_CHECKING:
 class LoopCallbacks:
     """All methods are no-ops by default. Subclass to handle events."""
     def on_status(self, msg: str) -> None: pass
-    def on_iteration_start(self, iteration: int, board_size: int) -> None: pass
+    def on_iteration_start(self, iteration: int, board_size: int, sims: int,
+                           stag_stage: int, stag_counter: int) -> None: pass
     def on_self_play_progress(self, done: int, total: int) -> None: pass
     def on_self_play_done(self, n_samples: int, swap_games: int, games_played: int) -> None: pass
     def on_buffer_updated(self, n: int) -> None: pass
@@ -256,7 +257,12 @@ class Trainer:
         # ---- Main loop -----------------------------------------------------------
         while not stop.is_set():
             iteration += 1
-            cb.on_iteration_start(iteration, board_size)
+            at_largest   = (size_idx == len(cfg.board_sizes) - 1)
+            current_sims = cfg.sims_for_size(board_size)
+            stag_stage   = (0 if not at_largest else
+                            1 if current_sims == _original_final_sims else 2)
+            cb.on_iteration_start(iteration, board_size, current_sims,
+                                  stag_stage, iters_without_promotion)
             cb.on_status(f"Iteration {iteration} — self-play ({board_size}×{board_size})…")
             cb.on_self_play_progress(0, cfg.games_per_iteration)
 
@@ -320,7 +326,6 @@ class Trainer:
             cb.on_promotion_freq(recent_promotions)
 
             # Stagnation recovery — only at the final board size.
-            at_largest = (size_idx == len(cfg.board_sizes) - 1)
             if at_largest:
                 if promoted:
                     iters_without_promotion = 0

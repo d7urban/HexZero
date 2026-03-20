@@ -51,3 +51,7 @@ class TrainingSignals(QObject):
     # Arena promotion frequency: (promotions_in_window, window_size, has_data)
     # has_data = False until min_iters_per_size iterations have accumulated
     promotion_freq_updated = pyqtSignal(int, int, bool)
+
+    # Stagnation progress at final board size: (stage, counter, window)
+    # stage=0: not at final board; stage=1: original sims; stage=2: sims doubled
+    stagnation_progress = pyqtSignal(int, int, int)

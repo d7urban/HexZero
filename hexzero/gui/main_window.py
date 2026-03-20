@@ -76,7 +76,9 @@ class TrainingWorker(QObject):
 
         class _GUICallbacks(LoopCallbacks):
             def on_status(_, msg):                           sig.status_message.emit(msg)
-            def on_iteration_start(_, i, bs):                sig.iteration_started.emit(i)
+            def on_iteration_start(_, i, bs, sims, stag_stage, stag_counter):
+                sig.iteration_started.emit(i)
+                sig.stagnation_progress.emit(stag_stage, stag_counter, cfg.stagnation_window)
             def on_self_play_progress(_, d, t):              sig.self_play_progress.emit(d, t)
             def on_swap_rate(_, s, p):                       sig.swap_rate_updated.emit(s, p)
             def on_buffer_updated(_, n):                     sig.buffer_updated.emit(n)
@@ -302,6 +304,7 @@ class MainWindow(QMainWindow):
         sig.curriculum_progress.connect(self._stats.on_curriculum_progress)
         sig.swap_rate_updated.connect(self._stats.on_swap_rate_updated)
         sig.promotion_freq_updated.connect(self._stats.on_promotion_freq_updated)
+        sig.stagnation_progress.connect(self._stats.on_stagnation_progress)
 
     # ------------------------------------------------------------------
     # Slots
