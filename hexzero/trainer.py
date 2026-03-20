@@ -331,7 +331,8 @@ class Trainer:
                                 if cfg.mcts_simulations_per_size
                                 else cfg.mcts_simulations)
                 if iters_without_promotion >= cfg.stagnation_window:
-                    if current_sims < sims_cap:
+                    if current_sims == _original_final_sims and current_sims < sims_cap:
+                        # First stagnation: double sims and give one more window.
                         new_sims = min(current_sims * 2, sims_cap)
                         if cfg.mcts_simulations_per_size:
                             cfg.mcts_simulations_per_size[-1] = new_sims
@@ -341,7 +342,7 @@ class Trainer:
                         self.reset_lr()
                         cb.on_sims_doubled(new_sims, iteration)
                     else:
-                        # Already at sims cap, still no improvement — done.
+                        # Second stagnation after doubling — done.
                         cb.on_stagnation_stop(iteration)
                         break
 
