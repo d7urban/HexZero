@@ -47,6 +47,7 @@ class LoopCallbacks:
     def on_curriculum_progress(self, iters_on_size: int, min_iters: int) -> None: pass
     def on_board_size_advanced(self, board_size: int, reason: str, promoted: bool, iteration: int) -> None: pass
     def on_sims_doubled(self, new_sims: int, iteration: int) -> None: pass
+    def on_stagnation_stop(self, iteration: int) -> None: pass
     def on_iteration_done(self, iteration: int) -> None: pass
 
 
@@ -329,16 +330,20 @@ class Trainer:
                 current_sims = (cfg.mcts_simulations_per_size[-1]
                                 if cfg.mcts_simulations_per_size
                                 else cfg.mcts_simulations)
-                if (iters_without_promotion >= cfg.stagnation_window
-                        and current_sims < sims_cap):
-                    new_sims = min(current_sims * 2, sims_cap)
-                    if cfg.mcts_simulations_per_size:
-                        cfg.mcts_simulations_per_size[-1] = new_sims
+                if iters_without_promotion >= cfg.stagnation_window:
+                    if current_sims < sims_cap:
+                        new_sims = min(current_sims * 2, sims_cap)
+                        if cfg.mcts_simulations_per_size:
+                            cfg.mcts_simulations_per_size[-1] = new_sims
+                        else:
+                            cfg.mcts_simulations = new_sims
+                        iters_without_promotion = 0
+                        self.reset_lr()
+                        cb.on_sims_doubled(new_sims, iteration)
                     else:
-                        cfg.mcts_simulations = new_sims
-                    iters_without_promotion = 0
-                    self.reset_lr()
-                    cb.on_sims_doubled(new_sims, iteration)
+                        # Already at sims cap, still no improvement — done.
+                        cb.on_stagnation_stop(iteration)
+                        break
 
             ckpt_io.save_training_state(cfg.checkpoint_dir, {
                 "iteration":                 iteration,

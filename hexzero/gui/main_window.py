@@ -89,6 +89,10 @@ class TrainingWorker(QObject):
                 sig.status_message.emit(
                     f"Iteration {i} — stagnation: MCTS sims doubled to {new_sims} for final board size."
                 )
+            def on_stagnation_stop(_, i):
+                sig.status_message.emit(
+                    f"Iteration {i} — training complete: no promotion at maximum sims. Stopped."
+                )
             def on_iteration_done(_, i):                     sig.iteration_finished.emit(i)
             def on_promotion_freq(_, rp):
                 has_data = len(rp) > 0

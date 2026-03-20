@@ -70,6 +70,9 @@ def run_headless(cfg: HexZeroConfig, resume_path: str = None) -> None:
             print(f"  → {prefix}Curriculum advanced to {bs}×{bs}! ({reason})")
         def on_sims_doubled(self, new_sims, iteration):
             print(f"  → Stagnation: MCTS sims doubled to {new_sims} for final board size.")
+        def on_stagnation_stop(self, iteration):
+            print(f"\nTraining complete: no promotion in {cfg.stagnation_window} iterations "
+                  f"at maximum sims ({cfg.mcts_simulations_per_size[-1]}). Stopping.")
 
     try:
         trainer.run_loop(callbacks=_PrintCallbacks(), initial_path=initial_path)
