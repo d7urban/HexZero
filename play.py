@@ -10,6 +10,7 @@ Usage:
 """
 
 import argparse
+import copy
 import io
 import subprocess
 import sys
@@ -68,7 +69,7 @@ def _play_chime(wav_bytes: bytes) -> None:
     threading.Thread(target=_run, daemon=True).start()
 from config import HexZeroConfig
 from hexzero.features import extract_features
-from hexzero.game import BLACK, SWAP_MOVE, WHITE, HexState
+from hexzero.game import BLACK, SWAP_MOVE, HexState
 from hexzero.gui.board_widget import BoardWidget
 from hexzero.gui.mcts_widget import MCTSWidget
 from hexzero.mcts import MCTSAgent
@@ -89,11 +90,14 @@ class _AISignals(QObject):
 # ---------------------------------------------------------------------------
 
 class PlayWindow(QMainWindow):
-    def __init__(self, cfg: HexZeroConfig, human_color: int, sims: int):
+    def __init__(self, cfg: HexZeroConfig, blue_is_human: bool, red_is_human: bool, sims: int):
         super().__init__()
         self.cfg              = cfg
-        self._human_color     = human_color
+        self._blue_is_human   = blue_is_human
+        self._red_is_human    = red_is_human
+        self._first_is_blue   = True   # True → BLACK=Blue goes first; False → BLACK=Red
         self._sims            = sims
+        self._history: list[tuple] = []   # (HexState_copy, first_is_blue) before each move
         self._device          = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self._net             = build_net(cfg, self._device, compile=False)
         self._state:  HexState | None   = None
@@ -166,6 +170,22 @@ class PlayWindow(QMainWindow):
         return infer_fn
 
     # ------------------------------------------------------------------
+    # Player helpers
+    # ------------------------------------------------------------------
+
+    def _player_is_human(self, player: int) -> bool:
+        """Is game `player` (BLACK or WHITE) controlled by a human?"""
+        if self._first_is_blue:
+            return self._blue_is_human if player == BLACK else self._red_is_human
+        return self._red_is_human if player == BLACK else self._blue_is_human
+
+    def _player_visual_name(self, player: int) -> str:
+        """Visual colour name ('Blue' or 'Red') for game player."""
+        if self._first_is_blue:
+            return "Blue" if player == BLACK else "Red"
+        return "Red" if player == BLACK else "Blue"
+
+    # ------------------------------------------------------------------
     # Game control
     # ------------------------------------------------------------------
 
@@ -176,8 +196,51 @@ class PlayWindow(QMainWindow):
         self._ai_generation += 1
         self._ai_thread = None
 
+    def _undo(self) -> None:
+        if not self._history:
+            return
+        self._cancel_ai()
+
+        both_human   = self._blue_is_human and self._red_is_human
+        neither_human = not self._blue_is_human and not self._red_is_human
+
+        # Pop at least one move; in single-human mode keep popping until
+        # the restored state's current player is the human.
+        state, first_is_blue = self._history.pop()
+        if not both_human and not neither_human:
+            while self._history:
+                cp = state.current_player
+                if first_is_blue:
+                    is_human = self._blue_is_human if cp == BLACK else self._red_is_human
+                else:
+                    is_human = self._red_is_human if cp == BLACK else self._blue_is_human
+                if is_human:
+                    break
+                state, first_is_blue = self._history.pop()
+
+        self._state = state
+        if first_is_blue != self._first_is_blue:
+            self._first_is_blue = first_is_blue
+            self._board.set_colors_swapped(not self._first_is_blue)
+            self._first_combo.blockSignals(True)
+            self._first_combo.setCurrentIndex(0 if self._first_is_blue else 1)
+            self._first_combo.blockSignals(False)
+
+        # Rebuild agent — the old tree is stale after undo.
+        self._agent = MCTSAgent(
+            infer_fn=self._make_infer_fn(),
+            simulations=self._sims,
+            cpuct=self.cfg.cpuct,
+            dirichlet_epsilon=0.0,
+            temperature=1.0,
+            temperature_moves=self.cfg.temperature_moves,
+        )
+        self._board.set_state(self._state)
+        self._refresh_ui()
+
     def _new_game(self) -> None:
         self._cancel_ai()
+        self._history = []
         self._status_override = None
         size = self.cfg.initial_board_size
         self._state = HexState(size, pie_rule=self.cfg.use_pie_rule)
@@ -189,22 +252,25 @@ class PlayWindow(QMainWindow):
             temperature=1.0,
             temperature_moves=self.cfg.temperature_moves,
         )
+        self._board.set_colors_swapped(not self._first_is_blue)
         self._board.set_state(self._state)
         self._mcts_widget.clear()
         self._refresh_ui()
-        if self._state.current_player != self._human_color:
+        if not self._player_is_human(self._state.current_player):
             self._start_ai_turn()
 
     def _apply_move(self, move) -> None:
+        self._history.append((copy.deepcopy(self._state), self._first_is_blue))
         self._agent.update_root(move)
         self._state.apply_move(move)
 
         if move == SWAP_MOVE:
-            # Both players' identities switch; keep tracking consistent.
-            self._human_color = -self._human_color
-            self._color_combo.blockSignals(True)
-            self._color_combo.setCurrentIndex(0 if self._human_color == BLACK else 1)
-            self._color_combo.blockSignals(False)
+            # Pie-rule swap: players switch roles, so first-is-blue flips.
+            self._first_is_blue = not self._first_is_blue
+            self._board.set_colors_swapped(not self._first_is_blue)
+            self._first_combo.blockSignals(True)
+            self._first_combo.setCurrentIndex(0 if self._first_is_blue else 1)
+            self._first_combo.blockSignals(False)
             _play_chime(_CHIME_SWAP)
 
         self._board.set_state(self._state)
@@ -212,7 +278,7 @@ class PlayWindow(QMainWindow):
 
         if self._state.is_terminal():
             _play_chime(_CHIME_WIN)
-        elif self._state.current_player != self._human_color:
+        elif not self._player_is_human(self._state.current_player):
             self._start_ai_turn()
 
     def _start_ai_turn(self) -> None:
@@ -243,7 +309,7 @@ class PlayWindow(QMainWindow):
     def _on_human_click(self, row: int, col: int) -> None:
         if self._state is None or self._state.is_terminal():
             return
-        if self._state.current_player != self._human_color:
+        if not self._player_is_human(self._state.current_player):
             return
         # Clicking the last-placed stone while swap is legal → pie rule swap
         if (self.cfg.use_pie_rule
@@ -257,7 +323,7 @@ class PlayWindow(QMainWindow):
 
     @pyqtSlot()
     def _on_swap_clicked(self) -> None:
-        if self._state is None or self._state.current_player != self._human_color:
+        if self._state is None or not self._player_is_human(self._state.current_player):
             return
         if not (self.cfg.use_pie_rule and self._state.move_count == 1):
             return
@@ -271,8 +337,10 @@ class PlayWindow(QMainWindow):
             return
         self._mcts_widget.update_info(info)
         if move == SWAP_MOVE:
-            new_color = "Red" if self._human_color == WHITE else "Blue"
-            self._status_override = f"AI swapped — you now play {new_color}."
+            # After _apply_move flips _first_is_blue, human plays WHITE.
+            # Compute the visual name of WHITE under the new (flipped) assignment.
+            human_visual = "Blue" if self._first_is_blue else "Red"  # flipped: opposite of current
+            self._status_override = f"AI swapped — you now play {human_visual}."
         self._apply_move(move)
 
     @pyqtSlot(int, str)
@@ -287,8 +355,18 @@ class PlayWindow(QMainWindow):
         self._new_game()
 
     @pyqtSlot(int)
-    def _on_color_changed(self, idx: int) -> None:
-        self._human_color = self._color_combo.itemData(idx)
+    def _on_first_changed(self, idx: int) -> None:
+        self._first_is_blue = self._first_combo.itemData(idx)
+        self._new_game()
+
+    @pyqtSlot(int)
+    def _on_blue_changed(self, idx: int) -> None:
+        self._blue_is_human = self._blue_combo.itemData(idx)
+        self._new_game()
+
+    @pyqtSlot(int)
+    def _on_red_changed(self, idx: int) -> None:
+        self._red_is_human = self._red_combo.itemData(idx)
         self._new_game()
 
     # ------------------------------------------------------------------
@@ -300,10 +378,15 @@ class PlayWindow(QMainWindow):
             return
 
         is_terminal = self._state.is_terminal()
-        is_human    = not is_terminal and self._state.current_player == self._human_color
+        current     = self._state.current_player
+        is_human    = not is_terminal and self._player_is_human(current)
         can_swap    = (is_human and self.cfg.use_pie_rule
                        and self._state.move_count == 1)
         self._swap_btn.setVisible(can_swap)
+        self._act_undo.setEnabled(bool(self._history))
+
+        both_human   = self._blue_is_human and self._red_is_human
+        neither_human = not self._blue_is_human and not self._red_is_human
 
         # Status text — override takes priority (used for AI swap announcement)
         if self._status_override:
@@ -311,14 +394,18 @@ class PlayWindow(QMainWindow):
             self._status_override = None
         elif is_terminal:
             winner = self._state.winner()
-            if winner == self._human_color:
-                self._status_lbl.setText("You win!")
+            winner_name = self._player_visual_name(winner)
+            if both_human or neither_human:
+                self._status_lbl.setText(f"{winner_name} wins.")
+            elif self._player_is_human(winner):
+                self._status_lbl.setText(f"You win! ({winner_name})")
             else:
-                self._status_lbl.setText("AI wins.")
+                self._status_lbl.setText(f"AI wins. ({winner_name})")
         elif is_human:
-            color_name = "Blue" if self._human_color == BLACK else "Red"
+            color_name = self._player_visual_name(current)
             hint = " (or click Swap)" if can_swap else ""
-            self._status_lbl.setText(f"Your turn ({color_name}){hint} — click a cell.")
+            prefix = f"{color_name}'s turn" if both_human else f"Your turn ({color_name})"
+            self._status_lbl.setText(f"{prefix}{hint} — click a cell.")
         else:
             self._status_lbl.setText("AI is thinking…")
 
@@ -333,14 +420,37 @@ class PlayWindow(QMainWindow):
         act_new.triggered.connect(self._new_game)
         toolbar.addAction(act_new)
 
+        self._act_undo = QAction("Undo", self)
+        self._act_undo.setShortcut("Ctrl+Z")
+        self._act_undo.setEnabled(False)
+        self._act_undo.triggered.connect(self._undo)
+        toolbar.addAction(self._act_undo)
+
         toolbar.addSeparator()
-        toolbar.addWidget(QLabel("  Play as: "))
-        self._color_combo = QComboBox()
-        self._color_combo.addItem("Blue (first)", BLACK)
-        self._color_combo.addItem("Red (second)", WHITE)
-        self._color_combo.setCurrentIndex(0 if self._human_color == BLACK else 1)
-        self._color_combo.currentIndexChanged.connect(self._on_color_changed)
-        toolbar.addWidget(self._color_combo)
+        toolbar.addWidget(QLabel("  First: "))
+        self._first_combo = QComboBox()
+        self._first_combo.addItem("Blue", True)
+        self._first_combo.addItem("Red", False)
+        self._first_combo.setCurrentIndex(0 if self._first_is_blue else 1)
+        self._first_combo.setToolTip("Visual colour of the first player (BLACK)")
+        self._first_combo.currentIndexChanged.connect(self._on_first_changed)
+        toolbar.addWidget(self._first_combo)
+
+        toolbar.addWidget(QLabel("  Blue: "))
+        self._blue_combo = QComboBox()
+        self._blue_combo.addItem("Human", True)
+        self._blue_combo.addItem("AI", False)
+        self._blue_combo.setCurrentIndex(0 if self._blue_is_human else 1)
+        self._blue_combo.currentIndexChanged.connect(self._on_blue_changed)
+        toolbar.addWidget(self._blue_combo)
+
+        toolbar.addWidget(QLabel("  Red: "))
+        self._red_combo = QComboBox()
+        self._red_combo.addItem("Human", True)
+        self._red_combo.addItem("AI", False)
+        self._red_combo.setCurrentIndex(0 if self._red_is_human else 1)
+        self._red_combo.currentIndexChanged.connect(self._on_red_changed)
+        toolbar.addWidget(self._red_combo)
 
         toolbar.addSeparator()
         toolbar.addWidget(QLabel("  Board: "))
@@ -363,6 +473,13 @@ class PlayWindow(QMainWindow):
         self._sims_spin.setToolTip("MCTS simulations per AI move (takes effect next game)")
         self._sims_spin.valueChanged.connect(lambda v: setattr(self, "_sims", v))
         toolbar.addWidget(self._sims_spin)
+
+        toolbar.addSeparator()
+        self._mirror_btn = QPushButton("Mirror")
+        self._mirror_btn.setCheckable(True)
+        self._mirror_btn.setToolTip("Flip the board horizontally (acute angle top-right)")
+        self._mirror_btn.toggled.connect(lambda checked: self._board.set_mirrored(checked))  # noqa: PLW0108
+        toolbar.addWidget(self._mirror_btn)
 
         toolbar.addSeparator()
         self._swap_btn = QPushButton("Swap sides")
@@ -426,7 +543,20 @@ def main() -> None:
     if args.board_size is not None:
         cfg.initial_board_size = args.board_size
 
-    human_color = BLACK if args.color == "blue" else WHITE
+    import os
+    if not os.path.isdir(cfg.checkpoint_dir):
+        print(f"Error: checkpoint directory '{cfg.checkpoint_dir}' does not exist.")
+        print(f"  Start training first:  python main.py --checkpoint-dir {cfg.checkpoint_dir}")
+        sys.exit(1)
+
+    best = ckpt_io.best_checkpoint_path(cfg.checkpoint_dir)
+    if best is None:
+        print(f"Error: no best.pt found in '{cfg.checkpoint_dir}'.")
+        print(f"  Start training first:  python main.py --checkpoint-dir {cfg.checkpoint_dir}")
+        sys.exit(1)
+
+    blue_is_human = args.color != "red"   # default blue → human plays Blue
+    red_is_human  = args.color == "red"
 
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
@@ -443,7 +573,7 @@ def main() -> None:
     palette.setColor(QPalette.ColorRole.HighlightedText,  QColor(255, 255, 255))
     app.setPalette(palette)
 
-    window = PlayWindow(cfg, human_color, sims=args.sims)
+    window = PlayWindow(cfg, blue_is_human, red_is_human, sims=args.sims)
     window.show()
     sys.exit(app.exec())
 

@@ -306,7 +306,14 @@ def main() -> None:
 
     players: list[Player] = []
     for d in args.dirs:
-        player = _load_player(d, cfg, device, ratings)
+        if not os.path.isdir(d):
+            print(f"Error: checkpoint directory '{d}' does not exist — skipping.")
+            continue
+        try:
+            player = _load_player(d, cfg, device, ratings)
+        except FileNotFoundError as e:
+            print(f"Error: {e} — skipping.")
+            continue
         players.append(player)
         print(f"  #{player.rating_key:<4} {player.label:30s}  iter {player.iteration}  "
               f"board {player.board_size}×{player.board_size}  "

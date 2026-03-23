@@ -61,6 +61,8 @@ class BoardWidget(QWidget):
         self._policy: np.ndarray | None = None   # (H*W,) float32
         self._hover: tuple[int, int] | None = None
         self._win_path: set[tuple[int, int]] = set()
+        self._mirrored: bool = False
+        self._colors_swapped: bool = False   # swap Blue↔Red visual assignment
         self.setMouseTracking(True)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setMinimumSize(300, 300)
@@ -68,6 +70,15 @@ class BoardWidget(QWidget):
     # ------------------------------------------------------------------
     # Public slots
     # ------------------------------------------------------------------
+
+    def set_mirrored(self, mirrored: bool) -> None:
+        self._mirrored = mirrored
+        self.update()
+
+    def set_colors_swapped(self, swapped: bool) -> None:
+        """Swap Blue↔Red visual assignment (first player shown as Red instead of Blue)."""
+        self._colors_swapped = swapped
+        self.update()
 
     def set_state(self, state: HexState, policy: np.ndarray | None = None) -> None:
         self._state = state
@@ -128,11 +139,15 @@ class BoardWidget(QWidget):
         origin = self._board_origin(radius)
         px = origin.x() + col * dx + row * dx * 0.5
         py = origin.y() + row * dy
+        if self._mirrored:
+            px = self.width() - px
         return QPointF(px, py)
 
     def _cell_at_pos(self, px: float, py: float) -> tuple[int, int] | None:
         if self._state is None:
             return None
+        if self._mirrored:
+            px = self.width() - px
         radius = self._cell_radius()
         size   = self._state.size
         dx     = radius * math.sqrt(3)
@@ -205,41 +220,54 @@ class BoardWidget(QWidget):
         dx    = radius * math.sqrt(3)
         half  = int(dx / 2) + 1   # half-cell-width in pixels (ensures no gap)
 
-        # BLACK — top strip: above each cell in row 0
+        # When colors are swapped, Blue↔Red edge colours also swap.
+        col_tb = _COL_WHITE_EDGE if self._colors_swapped else _COL_BLACK_EDGE   # top/bottom
+        col_lr = _COL_BLACK_EDGE if self._colors_swapped else _COL_WHITE_EDGE   # left/right
+
+        # First-player (BLACK) — top strip: above each cell in row 0
         for col in range(size):
             c = self._cell_center(0, col, radius)
             painter.fillRect(
                 int(c.x() - half), int(c.y() - radius - strip),
                 half * 2, strip,
-                _COL_BLACK_EDGE,
+                col_tb,
             )
-        # BLACK — bottom strip: below each cell in row size-1
+        # First-player (BLACK) — bottom strip: below each cell in row size-1
         for col in range(size):
             c = self._cell_center(size - 1, col, radius)
             painter.fillRect(
                 int(c.x() - half), int(c.y() + radius),
                 half * 2, strip,
-                _COL_BLACK_EDGE,
+                col_tb,
             )
 
-        # WHITE — left strip: left of each cell in col 0
+        # Second-player (WHITE) — left/right strips (sides flip when mirrored)
         # Flat edge of pointy-top hex is at cx ± dx/2, spanning cy ± r/2
         half_v = int(radius / 2) + 1
         for row in range(size):
             c = self._cell_center(row, 0, radius)
-            painter.fillRect(
-                int(c.x() - dx / 2 - strip), int(c.y() - half_v),
-                strip, half_v * 2,
-                _COL_WHITE_EDGE,
-            )
-        # WHITE — right strip: right of each cell in col size-1
+            if self._mirrored:
+                painter.fillRect(
+                    int(c.x() + dx / 2), int(c.y() - half_v),
+                    strip, half_v * 2, col_lr,
+                )
+            else:
+                painter.fillRect(
+                    int(c.x() - dx / 2 - strip), int(c.y() - half_v),
+                    strip, half_v * 2, col_lr,
+                )
         for row in range(size):
             c = self._cell_center(row, size - 1, radius)
-            painter.fillRect(
-                int(c.x() + dx / 2), int(c.y() - half_v),
-                strip, half_v * 2,
-                _COL_WHITE_EDGE,
-            )
+            if self._mirrored:
+                painter.fillRect(
+                    int(c.x() - dx / 2 - strip), int(c.y() - half_v),
+                    strip, half_v * 2, col_lr,
+                )
+            else:
+                painter.fillRect(
+                    int(c.x() + dx / 2), int(c.y() - half_v),
+                    strip, half_v * 2, col_lr,
+                )
 
     def _draw_cell(
         self,
@@ -255,11 +283,13 @@ class BoardWidget(QWidget):
         corners  = _hex_corners(center.x(), center.y(), radius * 0.95)
         polygon  = QPolygonF(corners)
 
-        # Determine fill colour
+        # Determine fill colour (swap Blue↔Red when colors_swapped)
+        col_black = _COL_WHITE if self._colors_swapped else _COL_BLACK
+        col_white = _COL_BLACK if self._colors_swapped else _COL_WHITE
         if cell_val == BLACK:
-            fill = _COL_BLACK
+            fill = col_black
         elif cell_val == WHITE:
-            fill = _COL_WHITE
+            fill = col_white
         # Empty cell: maybe tint by policy heatmap
         elif self._policy is not None:
             idx = row * state.size + col
@@ -290,6 +320,8 @@ class BoardWidget(QWidget):
             dot_r = radius * 0.30
             if (row, col) in self._win_path:
                 dot_c = _COL_WIN_DOT
+            elif self._colors_swapped:
+                dot_c = QColor(255, 140, 140) if cell_val == BLACK else QColor(140, 185, 255)
             else:
                 dot_c = QColor(140, 185, 255) if cell_val == BLACK else QColor(255, 140, 140)
             painter.setBrush(QBrush(dot_c))
@@ -312,13 +344,20 @@ class BoardWidget(QWidget):
         lw = radius * 1.4   # label box width
         lh = radius * 0.9   # label box height
         for i in range(size):
-            # Row labels (A, B, C, ...) — to the left of each col-0 cell's flat edge
+            # Row labels (A, B, C, ...) — outside col-0's flat edge
             c = self._cell_center(i, 0, radius)
-            painter.drawText(
-                QRectF(c.x() - dx / 2 - lw - 2, c.y() - lh / 2, lw, lh),
-                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-                chr(ord("A") + i),
-            )
+            if self._mirrored:
+                painter.drawText(
+                    QRectF(c.x() + dx / 2 + 2, c.y() - lh / 2, lw, lh),
+                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                    chr(ord("A") + i),
+                )
+            else:
+                painter.drawText(
+                    QRectF(c.x() - dx / 2 - lw - 2, c.y() - lh / 2, lw, lh),
+                    Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                    chr(ord("A") + i),
+                )
             # Col labels (1, 2, 3, ...) — above each row-0 cell's top point
             c2 = self._cell_center(0, i, radius)
             painter.drawText(
