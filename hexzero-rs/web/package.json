@@ -1,0 +1,19 @@
+{
+  "name": "hexzero-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "wasm": "cd ../crates/hex-wasm && wasm-pack build --target web --release"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "vite": "^6.0.0"
+  },
+  "dependencies": {
+    "onnxruntime-web": "^1.24.3"
+  }
+}
